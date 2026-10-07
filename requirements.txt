@@ -1,1 +1,5 @@
-# Core dependencies: Telemetry Collector V0 utilizes the Python standard library for maximum reliability and zero external bloat.
+# AI Telemetry Agent - Core Runtime Dependencies
+# The collector relies strictly on the Python Standard Library (3.10+)
+# for zero external dependency bloat, maximum stability, and secure local execution.
+
+-e .

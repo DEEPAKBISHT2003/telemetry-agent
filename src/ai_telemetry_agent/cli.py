@@ -12,8 +12,22 @@ import sys
 import time
 from typing import Optional
 
-from ai_telemetry_agent.config.settings import ConfigurationError, load_settings
+from ai_telemetry_agent.config.settings import (
+    ConfigurationError,
+    Settings,
+    get_or_create_device_id,
+    get_user_agent_home,
+    load_settings,
+)
 from ai_telemetry_agent.core.collector import TelemetryCollector
+from ai_telemetry_agent.core.identity import (
+    DeveloperIdentity,
+    detect_hostname,
+    detect_os_username,
+    enroll,
+    get_identity,
+    is_enrolled,
+)
 from ai_telemetry_agent.integrations.hooks.installer import (
     get_global_hook_status,
     get_global_hooks_path,
@@ -21,67 +35,133 @@ from ai_telemetry_agent.integrations.hooks.installer import (
     uninstall_global_hooks,
 )
 from ai_telemetry_agent.sources.antigravity import ANTIGRAVITY_AI_TELEMETRY_STATUS
-from ai_telemetry_agent.storage.sqlite_store import SQLiteEventStore
+from ai_telemetry_agent.storage.base import EventStore
+from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
+
+
+def _safe_print(text: str = "", **kwargs) -> None:
+    """Print text safely across platforms and Windows code pages without crashing."""
+    try:
+        print(text, **kwargs)
+    except UnicodeEncodeError:
+        ascii_text = text.replace("✓", "[OK]").replace("✗", "[X]")
+        try:
+            print(ascii_text, **kwargs)
+        except Exception:
+            encoded = text.encode("ascii", errors="replace").decode("ascii")
+            print(encoded, **kwargs)
+
+
+def _get_active_store(settings: Optional[Settings] = None) -> EventStore:
+    """Resolve active local telemetry store: JSONLEventStore."""
+    if settings is None:
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = None
+
+    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
+    return JSONLEventStore(data_dir)
 
 
 def cmd_install(args: argparse.Namespace) -> None:
-    """Setup and initialize telemetry collection on the local machine."""
-    user_name = os.environ.get("USERNAME") or os.environ.get("USER") or Path.home().name
-    os_name = platform.system() + " " + platform.release()
+    """Setup, enroll, and initialize telemetry collection on the local machine."""
+    user_home = get_user_agent_home()
+    existing_ident = get_identity(custom_home=user_home)
 
-    print("\n" + "=" * 60)
-    print("AI Telemetry Agent — Machine Setup & Installation")
-    print("=" * 60)
-    print(f"Host / OS      : {platform.node()} ({os_name})")
-    print(f"Current User   : {user_name}")
-    print(f"Python Runtime : {sys.executable} (v{platform.python_version()})")
+    _safe_print("\n" + "=" * 40)
+    _safe_print("       AI Telemetry Agent Setup")
+    _safe_print("=" * 40)
 
-    # 1. Initialize configuration and persistent identity
+    if existing_ident:
+        _safe_print("✓ Telemetry Agent already configured")
+        _safe_print(f"Developer: {existing_ident.member_name}")
+        _safe_print(f"Device: {existing_ident.hostname}")
+        _safe_print(f"Device ID: {existing_ident.device_id}")
+        _safe_print(f"Member ID: {existing_ident.member_id}\n")
+    else:
+        # First-time enrollment
+        _safe_print("")
+        name_input = getattr(args, "name", None)
+        if name_input and name_input.strip():
+            member_name = name_input.strip()
+            _safe_print(f"Enter your name: {member_name}")
+        else:
+            if not sys.stdin.isatty():
+                default_name = detect_os_username() or "Developer"
+                member_name = default_name.strip()
+                _safe_print(f"Enter your name: {member_name}")
+            else:
+                while True:
+                    try:
+                        raw_name = input("Enter your name: ")
+                    except (EOFError, KeyboardInterrupt):
+                        _safe_print("\nSetup cancelled.")
+                        sys.exit(1)
+                    if raw_name and raw_name.strip():
+                        member_name = raw_name.strip()
+                        break
+                    _safe_print("Error: Name cannot be empty. Please enter a valid developer name.")
+
+        hostname = detect_hostname()
+        device_id = getattr(args, "device", None) or get_or_create_device_id(custom_home=user_home)
+
+        _safe_print("\nDetected device:")
+        _safe_print(f"  Hostname: {hostname}")
+        _safe_print(f"  Device ID: {device_id}")
+
+        _safe_print("\nDeveloper:")
+        _safe_print(f"  {member_name}\n")
+
+        # Confirmation
+        auto_yes = getattr(args, "yes", False) or not sys.stdin.isatty() or getattr(args, "name", None) is not None
+        if not auto_yes:
+            try:
+                confirm = input("Save this identity? [Y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                _safe_print("\nSetup cancelled.")
+                sys.exit(1)
+            if confirm and confirm not in ("y", "yes"):
+                _safe_print("Setup cancelled by user.")
+                sys.exit(1)
+
+        try:
+            ident = enroll(
+                member_name=member_name,
+                device_id=device_id,
+                hostname=hostname,
+                custom_home=user_home,
+            )
+            _safe_print("✓ Developer identity saved")
+        except Exception as e:
+            _safe_print(f"ERROR: Failed to save developer identity: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # Initialize configuration & storage
     try:
         settings = load_settings(
             env_file=getattr(args, "env_file", None),
             member_id=getattr(args, "member", None),
             device_id=getattr(args, "device", None),
         )
-    except ConfigurationError as ce:
-        print(f"\nERROR: Failed to load configuration: {ce}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Device ID      : {settings.device_id}")
-    print(f"Member ID      : {settings.member_id}")
-    print(f"App Data Path  : {settings.app_data_dir}")
-    print(f"Storage Path   : {settings.db_path}")
-
-    # 2. Initialize local storage
-    try:
-        store = SQLiteEventStore(settings.db_path)
-        print("Local Storage  : INITIALIZED (SQLite)")
+        store = JSONLEventStore(settings.data_dir)
     except Exception as e:
-        print(f"\nERROR: Failed to initialize local storage: {e}", file=sys.stderr)
+        _safe_print(f"\nERROR: Failed to initialize local storage: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # 3. Install global Antigravity hook
+    # Install global Antigravity hook
     target_hooks_file = Path(args.config) if getattr(args, "config", None) else None
-    print("\nConfiguring Global Antigravity Lifecycle Hooks...")
     success, msg, backup_path, other_count = install_global_hooks(
         hooks_file=target_hooks_file,
         python_exe=getattr(args, "python", None),
     )
 
     if not success:
-        print(f"ERROR: {msg}", file=sys.stderr)
+        _safe_print(f"ERROR: Failed to configure hooks: {msg}", file=sys.stderr)
         sys.exit(1)
 
-    if backup_path:
-        print(f"Backup created : {backup_path}")
-    print(f"Hook Status    : {msg}")
-    print(f"Other Hooks    : {other_count} preserved")
-
-    print("\n" + "=" * 60)
-    print("Installation Complete!")
-    print("Telemetry is now configured to capture Antigravity sessions globally.")
-    print("You can verify status anytime with: telemetry-agent status")
-    print("=" * 60 + "\n")
+    _safe_print("✓ Antigravity hooks installed")
+    _safe_print("✓ Telemetry agent configured\n")
 
 
 def cmd_start(args: argparse.Namespace) -> None:
@@ -118,8 +198,8 @@ def cmd_status(args: argparse.Namespace) -> None:
     except ConfigurationError:
         settings = None
 
-    db_path = Path(settings.local_database_path if settings else str(Path.home() / ".telemetry_agent" / "data" / "telemetry.db")).resolve()
-    pid_file = db_path.parent / "collector.pid"
+    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
+    pid_file = data_dir / "collector.pid"
 
     is_running = False
     pid = None
@@ -135,21 +215,23 @@ def cmd_status(args: argparse.Namespace) -> None:
     print("=" * 50)
     print(f"Process Status     : {'RUNNING (PID ' + str(pid) + ')' if is_running else 'STOPPED'}")
     if settings:
+        if settings.member_name:
+            print(f"Developer Name     : {settings.member_name}")
         print(f"Configured Member  : {settings.member_id}")
         print(f"Configured Device  : {settings.device_id}")
+        if settings.hostname:
+            print(f"Hostname           : {settings.hostname}")
         print(f"Collector Version  : {settings.collector_version}")
-    print(f"Database Path      : {db_path}")
+    print(f"Storage Directory  : {data_dir}")
+    print(f"Storage Format     : Date-based JSONL (telemetry-YYYY-MM-DD.jsonl)")
     print(f"Antigravity Status : {ANTIGRAVITY_AI_TELEMETRY_STATUS}")
 
-    if db_path.is_file():
-        store = SQLiteEventStore(str(db_path))
-        total_events = store.get_count()
-        print(f"Total Stored Events: {total_events}")
-        recent = store.get_events(limit=1, descending=True)
-        if recent:
-            print(f"Last Event Time    : {recent[0].timestamp} ({recent[0].event_type})")
-    else:
-        print("Total Stored Events: 0 (Database not created yet)")
+    store = _get_active_store(settings)
+    total_events = store.get_count()
+    print(f"Total Stored Events: {total_events}")
+    recent = store.get_events(limit=1, descending=True)
+    if recent:
+        print(f"Last Event Time    : {recent[0].timestamp} ({recent[0].event_type})")
     print("=" * 50 + "\n")
 
 
@@ -157,20 +239,10 @@ def cmd_events(args: argparse.Namespace) -> None:
     """Inspect locally collected telemetry events."""
     try:
         settings = load_settings(env_file=args.env_file)
-        db_path = str(settings.db_path)
     except Exception:
-        db_path = str(Path.home() / ".telemetry_agent" / "data" / "telemetry.db")
+        settings = None
 
-    if not Path(db_path).is_file():
-        # Fallback to local ./data/telemetry.db if exists
-        fallback = Path("./data/telemetry.db").resolve()
-        if fallback.is_file():
-            db_path = str(fallback)
-        else:
-            print("No telemetry database found. Start the collector or run 'telemetry-agent install' first.")
-            return
-
-    store = SQLiteEventStore(db_path)
+    store = _get_active_store(settings)
     events = store.get_events(
         limit=args.last,
         event_type=args.type,
@@ -225,19 +297,10 @@ def cmd_session(args: argparse.Namespace) -> None:
     """Show detailed breakdown of a single session, including all models used and run counts."""
     try:
         settings = load_settings(env_file=args.env_file)
-        db_path = str(settings.db_path)
     except Exception:
-        db_path = str(Path.home() / ".telemetry_agent" / "data" / "telemetry.db")
+        settings = None
 
-    if not Path(db_path).is_file():
-        fallback = Path("./data/telemetry.db").resolve()
-        if fallback.is_file():
-            db_path = str(fallback)
-        else:
-            print("No telemetry database found.")
-            return
-
-    store = SQLiteEventStore(db_path)
+    store = _get_active_store(settings)
     sessions = store.get_sessions(session_id=args.id, limit=1)
 
     if not sessions:
@@ -288,19 +351,10 @@ def cmd_sessions(args: argparse.Namespace) -> None:
     """List distinct Antigravity sessions and their repository correlation."""
     try:
         settings = load_settings(env_file=args.env_file)
-        db_path = str(settings.db_path)
     except Exception:
-        db_path = str(Path.home() / ".telemetry_agent" / "data" / "telemetry.db")
+        settings = None
 
-    if not Path(db_path).is_file():
-        fallback = Path("./data/telemetry.db").resolve()
-        if fallback.is_file():
-            db_path = str(fallback)
-        else:
-            print("No telemetry database found.")
-            return
-
-    store = SQLiteEventStore(db_path)
+    store = _get_active_store(settings)
     sessions = store.get_sessions(repository_name=args.repo, member_id=args.member, limit=args.limit)
 
     if not sessions:
@@ -331,19 +385,10 @@ def cmd_summary(args: argparse.Namespace) -> None:
     """Show aggregated session, AI run, and tool usage summary grouped by repository."""
     try:
         settings = load_settings(env_file=args.env_file)
-        db_path = str(settings.db_path)
     except Exception:
-        db_path = str(Path.home() / ".telemetry_agent" / "data" / "telemetry.db")
+        settings = None
 
-    if not Path(db_path).is_file():
-        fallback = Path("./data/telemetry.db").resolve()
-        if fallback.is_file():
-            db_path = str(fallback)
-        else:
-            print("No telemetry database found.")
-            return
-
-    store = SQLiteEventStore(db_path)
+    store = _get_active_store(settings)
     summary = store.get_repository_summary(repository_name=args.repo)
 
     if not summary:
@@ -385,11 +430,11 @@ def cmd_stop(args: argparse.Namespace) -> None:
     """Stop a running collector instance via pid file."""
     try:
         settings = load_settings(env_file=args.env_file)
-        db_path = settings.db_path
+        data_dir = settings.data_dir
     except Exception:
-        db_path = Path.home() / ".telemetry_agent" / "data" / "telemetry.db"
+        data_dir = Path.home() / ".telemetry_agent" / "data"
 
-    pid_file = db_path.parent / "collector.pid"
+    pid_file = data_dir / "collector.pid"
     if not pid_file.exists():
         # check local ./data
         pid_file = Path("./data/collector.pid").resolve()
@@ -507,8 +552,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", help="Agent actions")
 
-    # Install command (Step 5)
-    p_install = subparsers.add_parser("install", help="Setup and prepare machine for AI telemetry collection")
+    # Install command
+    p_install = subparsers.add_parser("install", help="Setup, enroll developer, and prepare machine for AI telemetry collection")
+    p_install.add_argument("--name", "-n", type=str, default=None, help="Developer name for non-interactive enrollment")
+    p_install.add_argument("-y", "--yes", action="store_true", help="Automatic yes to enrollment confirmation")
     p_install.add_argument("--member", type=str, default=None, help="Configure member identity (default: system username)")
     p_install.add_argument("--device", type=str, default=None, help="Configure device ID (default: persistent UUID)")
     p_install.add_argument("--config", type=str, default=None, help="Custom hooks.json path")
@@ -567,6 +614,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cli_entrypoint() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     parser = build_parser()
     args = parser.parse_args()
 

@@ -61,6 +61,9 @@ class CollectorInfo:
 @dataclass
 class IdentityInfo:
     member_id: str
+    member_name: Optional[str] = None
+    hostname: Optional[str] = None
+    os_username: Optional[str] = None
 
 
 @dataclass
@@ -187,7 +190,10 @@ class TelemetryEvent:
                 device_id=collector_data.get("device_id", "")
             ),
             identity=IdentityInfo(
-                member_id=identity_data.get("member_id", "")
+                member_id=identity_data.get("member_id", ""),
+                member_name=identity_data.get("member_name"),
+                hostname=identity_data.get("hostname"),
+                os_username=identity_data.get("os_username"),
             ),
             context=ContextInfo(
                 session_id=context_data.get("session_id"),

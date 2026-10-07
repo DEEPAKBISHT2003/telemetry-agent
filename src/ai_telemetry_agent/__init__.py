@@ -6,7 +6,8 @@ __package_name__ = "ai-telemetry-agent"
 from ai_telemetry_agent.config.settings import Settings, load_settings
 from ai_telemetry_agent.core.collector import TelemetryCollector
 from ai_telemetry_agent.core.event import TelemetryEvent, EventType
-from ai_telemetry_agent.storage.sqlite_store import SQLiteEventStore
+from ai_telemetry_agent.core.identity import DeveloperIdentity, get_identity, is_enrolled
+from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 
 __all__ = [
     "__version__",
@@ -16,5 +17,8 @@ __all__ = [
     "TelemetryCollector",
     "TelemetryEvent",
     "EventType",
-    "SQLiteEventStore",
+    "DeveloperIdentity",
+    "get_identity",
+    "is_enrolled",
+    "JSONLEventStore",
 ]

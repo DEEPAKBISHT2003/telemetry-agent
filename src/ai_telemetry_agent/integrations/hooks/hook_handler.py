@@ -1,7 +1,7 @@
 """Lifecycle hook handler invoked by Antigravity (%USERPROFILE%/.gemini/config/hooks.json).
 
 Receives hook context over stdin, parses lifecycle metadata, resolves Git repository context,
-attaches local developer identity, and safely registers events into the local SQLite store.
+attaches local developer identity, and safely registers events into the local JSONL event store.
 """
 
 import datetime
@@ -19,9 +19,7 @@ for parent in [CURRENT_DIR.parents[2], CURRENT_DIR.parents[3]]:
 
 from ai_telemetry_agent.config.settings import load_settings
 from ai_telemetry_agent.core.collector import TelemetryCollector
-from ai_telemetry_agent.core.event import AITelemetryPayload, EventType
 from ai_telemetry_agent.core.repository import detect_repository_context
-from ai_telemetry_agent.logging.structured import sanitize_data
 from ai_telemetry_agent.sources.ai_provider import AIEventBuilder
 
 
@@ -125,8 +123,7 @@ def process_hook(hook_type: str) -> None:
         if raw_event:
             event = collector.processor.process_raw(raw_event)
             if event:
-                collector.queue.enqueue(event)
-                collector.process_queue_batch()
+                collector.store.save_event(event)
 
     except Exception:
         # Never fail or break the developer's agent loop

@@ -1,5 +1,5 @@
 # AI Telemetry Agent Installer for Windows PowerShell
-# Phase 2.6 - Global Antigravity Lifecycle Hook Installation
+# Installs Developer Identity & Global Antigravity Lifecycle Hooks
 
 $ErrorActionPreference = "Stop"
 
@@ -21,10 +21,10 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
     exit 1
 }
 
-# Run install-hook CLI command
+# Run install CLI command
 Push-Location $ProjectRoot
 try {
-    & $PythonExe -m src.main install-hook $args
+    & $PythonExe -m ai_telemetry_agent install $args
     $exitCode = $LASTEXITCODE
 } finally {
     Pop-Location

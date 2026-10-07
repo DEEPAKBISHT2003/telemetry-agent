@@ -1,6 +1,7 @@
 """Configuration settings and environment variable parser for AI Telemetry Agent."""
 
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -96,32 +97,36 @@ def parse_dotenv(env_path: Path) -> dict:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-DEFAULT_DB_PATH = get_user_agent_home() / "data" / "telemetry.db"
 
 
 @dataclass(frozen=True)
 class Settings:
     member_id: str
     device_id: str
+    member_name: Optional[str] = None
+    hostname: Optional[str] = None
     collector_version: str = "0.1.0"
     log_level: str = "INFO"
     heartbeat_interval_seconds: int = 30
-    local_database_path: str = str(DEFAULT_DB_PATH)
+    telemetry_data_dir: Optional[str] = None
     git_monitor_interval_seconds: int = 10
     git_monitor_paths: List[str] = field(default_factory=lambda: ["."])
     antigravity_monitor_enabled: bool = True
 
     @property
-    def db_path(self) -> Path:
-        p = Path(self.local_database_path)
-        if not p.is_absolute():
-            return (PROJECT_ROOT / p).resolve()
-        return p.resolve()
+    def data_dir(self) -> Path:
+        """Return the persistent directory storing date-based JSONL files (~/.telemetry_agent/data)."""
+        override = os.environ.get("TELEMETRY_DATA_DIR")
+        if override:
+            return Path(override).resolve()
+        if self.telemetry_data_dir:
+            p = Path(self.telemetry_data_dir)
+            return (PROJECT_ROOT / p).resolve() if not p.is_absolute() else p.resolve()
+        return (get_user_agent_home() / "data").resolve()
 
     @property
     def app_data_dir(self) -> Path:
         return get_user_agent_home()
-
 
 
 def load_settings(
@@ -154,10 +159,28 @@ def load_settings(
             env_vars.update(parse_dotenv(path))
             break
 
-    # 2. Layer with actual OS environment variables
+    # 2. Check persistent identity.json in user_home if no explicit env_file is provided
+    member_name = None
+    hostname = None
+    if env_file is None:
+        ident_file = user_home / "identity.json"
+        if ident_file.is_file():
+            try:
+                ident_data = json.loads(ident_file.read_text(encoding="utf-8"))
+                if isinstance(ident_data, dict):
+                    if not env_vars.get("MEMBER_ID") and ident_data.get("member_id"):
+                        env_vars["MEMBER_ID"] = str(ident_data["member_id"]).strip()
+                    if not env_vars.get("DEVICE_ID") and ident_data.get("device_id"):
+                        env_vars["DEVICE_ID"] = str(ident_data["device_id"]).strip()
+                    member_name = ident_data.get("member_name")
+                    hostname = ident_data.get("hostname")
+            except Exception:
+                pass
+
+    # 3. Layer with actual OS environment variables
     for key in [
         "MEMBER_ID", "DEVICE_ID", "COLLECTOR_VERSION", "LOG_LEVEL",
-        "HEARTBEAT_INTERVAL_SECONDS", "LOCAL_DATABASE_PATH",
+        "HEARTBEAT_INTERVAL_SECONDS", "TELEMETRY_DATA_DIR",
         "GIT_MONITOR_INTERVAL_SECONDS", "GIT_MONITOR_PATHS",
         "ANTIGRAVITY_MONITOR_ENABLED"
     ]:
@@ -165,7 +188,7 @@ def load_settings(
         if val is not None:
             env_vars[key] = val
 
-    # 3. Layer with explicit overrides
+    # 4. Layer with explicit overrides
     if overrides:
         env_vars.update(overrides)
 
@@ -201,13 +224,7 @@ def load_settings(
     except ValueError:
         heartbeat_sec = 30
 
-    raw_db_path = env_vars.get("LOCAL_DATABASE_PATH", "").strip()
-    if not raw_db_path:
-        # Default to ~/.telemetry_agent/data/telemetry.db
-        db_path = str(user_home / "data" / "telemetry.db")
-    else:
-        p = Path(raw_db_path)
-        db_path = str((PROJECT_ROOT / p).resolve()) if not p.is_absolute() else str(p.resolve())
+    raw_data_dir = env_vars.get("TELEMETRY_DATA_DIR", "").strip() or None
 
     try:
         git_interval = int(env_vars.get("GIT_MONITOR_INTERVAL_SECONDS", 10))
@@ -231,10 +248,12 @@ def load_settings(
     return Settings(
         member_id=final_member_id,
         device_id=final_device_id,
+        member_name=member_name,
+        hostname=hostname,
         collector_version=version,
         log_level=log_level,
         heartbeat_interval_seconds=heartbeat_sec,
-        local_database_path=db_path,
+        telemetry_data_dir=raw_data_dir,
         git_monitor_interval_seconds=git_interval,
         git_monitor_paths=git_paths,
         antigravity_monitor_enabled=ag_enabled,

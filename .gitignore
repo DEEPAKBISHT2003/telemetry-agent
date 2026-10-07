@@ -53,6 +53,12 @@ data/
 *.sqlite3
 *.pid
 collector.pid
+*.jsonl
+
+# Local agent home and identity files
+.telemetry_agent/
+identity.json
+device_id
 
 # Environment variables and secrets
 .env

@@ -1,5 +1,5 @@
 # AI Telemetry Agent Uninstaller for Windows PowerShell
-# Phase 2.6 - Global Antigravity Lifecycle Hook Uninstallation
+# Uninstalls Global Antigravity Lifecycle Hooks
 
 $ErrorActionPreference = "Stop"
 
@@ -22,7 +22,7 @@ if (Get-Command py -ErrorAction SilentlyContinue) {
 # Run uninstall-hook CLI command
 Push-Location $ProjectRoot
 try {
-    & $PythonExe -m src.main uninstall-hook $args
+    & $PythonExe -m ai_telemetry_agent uninstall-hook $args
     $exitCode = $LASTEXITCODE
 } finally {
     Pop-Location

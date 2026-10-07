@@ -73,6 +73,8 @@ class EventProcessor:
             # 3. Identity Attachment
             member_id = self.identity_provider.get_current_member()
             device_id = self.identity_provider.get_device_id()
+            member_name = getattr(self.identity_provider, "get_member_name", lambda: None)()
+            hostname = getattr(self.identity_provider, "get_hostname", lambda: None)()
 
             collector_info = CollectorInfo(
                 version=self.collector_version,
@@ -80,6 +82,8 @@ class EventProcessor:
             )
             identity_info = IdentityInfo(
                 member_id=member_id,
+                member_name=member_name,
+                hostname=hostname,
             )
 
             # 4. Context Attachment & Repository Resolution

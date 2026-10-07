@@ -1,4 +1,4 @@
-"""Core Telemetry Collector engine managing lifecycle, sources, queueing, and persistence."""
+"""Core Telemetry Collector engine managing lifecycle, sources, and JSONL persistence."""
 
 import datetime
 import json
@@ -19,6 +19,7 @@ from ai_telemetry_agent.sources.antigravity import AntigravitySource
 from ai_telemetry_agent.sources.base import EventSource
 from ai_telemetry_agent.sources.git import GitSource
 from ai_telemetry_agent.sources.system import SystemSource
+from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 
 logger = get_logger("telemetry.collector")
 
@@ -27,9 +28,6 @@ class TelemetryCollector:
     """Main Telemetry Collector instance running on developer's laptop."""
 
     def __init__(self, settings: Optional[Settings] = None):
-        from ai_telemetry_agent.storage.queue import SQLiteEventQueue
-        from ai_telemetry_agent.storage.sqlite_store import SQLiteEventStore
-
         self.settings = settings or load_settings()
         setup_structured_logging(self.settings.log_level)
 
@@ -39,8 +37,7 @@ class TelemetryCollector:
             collector_version=self.settings.collector_version,
         )
 
-        self.store = SQLiteEventStore(str(self.settings.db_path))
-        self.queue = SQLiteEventQueue(str(self.settings.db_path))
+        self.store = JSONLEventStore(self.settings.data_dir)
 
         # Initialize event sources
         self.system_source = SystemSource(
@@ -67,7 +64,7 @@ class TelemetryCollector:
 
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
-        self._pid_file = Path(self.settings.local_database_path).parent / "collector.pid"
+        self._pid_file = self.settings.data_dir / "collector.pid"
 
     def _write_pid_file(self) -> None:
         try:
@@ -100,7 +97,7 @@ class TelemetryCollector:
             version=self.settings.collector_version,
             member_id=member_id,
             device_id=device_id,
-            database=str(self.settings.db_path),
+            storage=str(self.settings.data_dir),
         )
 
         # Start all event sources
@@ -122,7 +119,7 @@ class TelemetryCollector:
         )
 
     def stop(self) -> None:
-        """Gracefully stop collector, flush pending events, and close resources."""
+        """Gracefully stop collector, emit shutdown events, and close resources."""
         if not self._running:
             return
 
@@ -142,9 +139,7 @@ class TelemetryCollector:
         # Process remaining shutdown events
         self.poll_and_process()
 
-        # Flush queue to persistent store
-        self.flush_queue()
-
+        self.store.close()
         self._running = False
         self._remove_pid_file()
 
@@ -156,7 +151,7 @@ class TelemetryCollector:
         )
 
     def poll_and_process(self) -> int:
-        """Poll all active sources, process events, enqueue, and persist them.
+        """Poll all active sources, process events, and append to JSONL store.
 
         Returns:
             Number of new events processed.
@@ -168,41 +163,13 @@ class TelemetryCollector:
                 for raw in raw_events:
                     event = self.processor.process_raw(raw)
                     if event:
-                        # 1. Enqueue
-                        self.queue.enqueue(event)
-                        # 2. Log structured event
-                        self._log_event(event, src.name)
-                        collected_count += 1
+                        if self.store.save_event(event):
+                            self._log_event(event, src.name)
+                            collected_count += 1
             except Exception as ex:
                 logger.error("source_collect_error", source=src.name, error=str(ex))
 
-        # Process queue items into persistent storage
-        self.process_queue_batch(batch_size=50)
         return collected_count
-
-    def process_queue_batch(self, batch_size: int = 50) -> int:
-        """Dequeue pending items and write them to SQLite event store."""
-        items = self.queue.dequeue(batch_size=batch_size)
-        processed = 0
-        for item in items:
-            try:
-                saved = self.store.save_event(item.event)
-                if saved:
-                    self.queue.mark_processed(item.queue_id)
-                    processed += 1
-                else:
-                    self.queue.retry(item.queue_id, "Duplicate or save error")
-            except Exception as ex:
-                self.queue.retry(item.queue_id, str(ex))
-                logger.error("queue_process_error", queue_id=item.queue_id, error=str(ex))
-        return processed
-
-    def flush_queue(self) -> None:
-        """Flush all pending queue items into store."""
-        while True:
-            processed = self.process_queue_batch(batch_size=100)
-            if processed == 0:
-                break
 
     def _log_event(self, event: TelemetryEvent, source_name: str) -> None:
         """Emit structured log for each collected event."""

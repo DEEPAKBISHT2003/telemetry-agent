@@ -1,11 +1,9 @@
+"""Telemetry storage interfaces and implementations."""
+
 from ai_telemetry_agent.storage.base import EventStore
-from ai_telemetry_agent.storage.queue import EventQueue, SQLiteEventQueue, QueueItem
-from ai_telemetry_agent.storage.sqlite_store import SQLiteEventStore
+from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 
 __all__ = [
     "EventStore",
-    "EventQueue",
-    "SQLiteEventQueue",
-    "QueueItem",
-    "SQLiteEventStore",
+    "JSONLEventStore",
 ]

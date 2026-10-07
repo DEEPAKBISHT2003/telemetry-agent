@@ -4,7 +4,7 @@
   "collector_version": "0.1.0",
   "log_level": "INFO",
   "heartbeat_interval_seconds": 30,
-  "local_database_path": "./data/telemetry.db",
+  "telemetry_data_dir": null,
   "git_monitor_interval_seconds": 10,
   "git_monitor_paths": ["."],
   "antigravity_monitor_enabled": true

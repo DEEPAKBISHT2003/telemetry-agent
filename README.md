@@ -1,116 +1,164 @@
-# AI Telemetry Collector (Phase 1 — V0)
+# AI Telemetry Agent
 
-A standalone local telemetry collector designed to run on a developer's laptop to capture local developer activity, Git metadata, and AI telemetry signals in an organization with shared accounts.
-
----
-
-## Key Features
-
-- **Decoupled Developer Identity**: Supports local configurable `MEMBER_ID` and `DEVICE_ID`, decoupling machine activity from shared organizational accounts.
-- **Provider-Independent Architecture**: Generic telemetry architecture with pluggable event sources (`SystemSource`, `GitSource`, `AntigravitySource`).
-- **Standardized Event Schema**: Single standardized envelope with strict ISO-8601 timestamps, UUIDs, collector metadata, and sanitized payloads.
-- **Privacy First (Allowlist & Secret Redaction)**: Never collects source code, terminal history, passwords, or API keys. Automatic sanitization of sensitive values.
-- **Resilient Local Pipeline**: Events flow through `Source -> Validation -> Normalization -> Local Queue -> SQLite Storage`.
-- **Zero Fabrication of AI Telemetry**: Standard AI schema that strictly stores `null` when metrics are unavailable from official sources.
-- **Structured Logging & CLI**: Built-in CLI for starting, inspecting event status, viewing historical events, and stopping the daemon.
+A local developer telemetry agent for Antigravity AI usage, Git activity, and engineering signals.
 
 ---
 
-## Installation
+## Architecture Overview
 
-The collector is built with standard Python and has zero mandatory runtime dependencies.
-
-1. Clone or navigate to the repository:
-```bash
-cd ai-telemetry-collector
+```
+Developer Interaction
+       │
+       ▼
+Antigravity Lifecycle Hooks (%USERPROFILE%\.gemini\config\hooks.json)
+       │
+       ▼
+AI Telemetry Agent Collector (ai_telemetry_agent)
+       │
+       ▼
+Append-Only Daily JSONL Storage (~/.telemetry_agent/)
 ```
 
-2. (Optional) Install development and testing dependencies:
+### Storage Structure
+
+```
+~/.telemetry_agent/
+├── identity.json
+├── device_id
+└── data/
+    ├── telemetry-2026-10-07.jsonl
+    ├── telemetry-2026-10-08.jsonl
+    └── telemetry-YYYY-MM-DD.jsonl
+```
+
+- **`identity.json`** (`WHO`): Local developer identity and hardware metadata (`member_id`, `member_name`, `device_id`, `hostname`).
+- **`data/telemetry-YYYY-MM-DD.jsonl`** (`WHAT`): Append-only daily JSONL telemetry files named by UTC date. Exactly one valid JSON object per line.
+
+---
+
+## Privacy & Security
+
+The AI Telemetry Agent enforces strict privacy boundaries:
+- **NO Prompts or Model Responses**: Never collects, records, or transmits conversational text or prompts.
+- **NO Source Code or File Contents**: Never collects repository file contents, code diffs, or patch bodies.
+- **NO Tool Arguments or Command History**: Never stores terminal history or tool call parameter values.
+- **NO Secrets or Credentials**: Environment variables, API keys, passwords, and tokens are scrubbed and excluded.
+- **Metadata Only**: Collects only execution metadata (event type, UTC timestamp, session ID, model name, tool name, repository name, branch).
+
+---
+
+## Installation & Setup
+
+### 1. Install Package
 ```bash
-pip install -r requirements-dev.txt
+pip install ai-telemetry-agent
+```
+
+### 2. First-Time Developer Enrollment & Hook Setup
+Run the setup command:
+```bash
+telemetry-agent install
+```
+
+When run for the first time, you will be prompted for your name:
+```text
+========================================
+       AI Telemetry Agent Setup
+========================================
+
+Enter your name: Rahul Sharma
+
+Developer: Rahul Sharma
+Device: DELL-LAPTOP-123
+Device ID: dev-401e19f040bb
+
+Save this identity? [Y/n]: Y
+[OK] Developer identity saved
+[OK] Antigravity hooks installed
+[OK] Telemetry agent configured
+```
+
+Subsequent runs are idempotent and reuse the saved identity:
+```text
+========================================
+       AI Telemetry Agent Setup
+========================================
+[OK] Telemetry Agent already configured
+Developer: Rahul Sharma
+Device: DELL-LAPTOP-123
+Device ID: dev-401e19f040bb
+Member ID: mem-401e19f040
 ```
 
 ---
 
-## Configuration
+## CLI Commands
 
-Copy `.env.example` to `.env`:
-
+### Agent Status
 ```bash
-cp .env.example .env
+telemetry-agent status
+```
+Displays collector daemon state, local developer identity, device ID, hook installation status, and total recorded events.
+
+### View Recent Events
+```bash
+# View last 10 events
+telemetry-agent events --last 10
+
+# Filter by event type
+telemetry-agent events --type ai_run_started
+
+# Filter by repository
+telemetry-agent events --repo chatbot-service
+
+# Output formatted JSON
+telemetry-agent events --last 5 --json
 ```
 
-Set your local developer identity and preferences:
+### View Session Summaries
+```bash
+# Aggregate multi-model sessions across all JSONL logs
+telemetry-agent sessions
 
-```ini
-# Developer Identity (Required)
-MEMBER_ID=M001
-DEVICE_ID=DEV-001
-
-# Collector Configuration
-COLLECTOR_VERSION=0.1.0
-LOG_LEVEL=INFO
-HEARTBEAT_INTERVAL_SECONDS=30
-LOCAL_DATABASE_PATH=./data/telemetry.db
-
-# Event Source Settings
-GIT_MONITOR_INTERVAL_SECONDS=10
-GIT_MONITOR_PATHS=.
-ANTIGRAVITY_MONITOR_ENABLED=true
+# Inspect specific session history
+telemetry-agent session <session-id>
 ```
 
----
-
-## Quickstart & CLI Commands
-
-### 1. Start the Collector
+### Repository & Engineering Summary
 ```bash
-python -m src.main start
+# Aggregated metrics per repository
+telemetry-agent summary
 ```
 
-Or with inline identity overrides:
+### Manage Antigravity Hooks
 ```bash
-python -m src.main start --member M001 --device DEV-001
-```
+# Check hook installation status
+telemetry-agent hook-status
 
-### 2. Check Collector Status
-```bash
-python -m src.main status
-```
+# Install or repair global hooks
+telemetry-agent install-hook
 
-### 3. Inspect Collected Events
-View recent events in a structured table:
-```bash
-python -m src.main events --last 20
-```
-
-Filter by event type:
-```bash
-python -m src.main events --type git_commit_detected
-```
-
-Export events as JSON:
-```bash
-python -m src.main events --json
-```
-
-### 4. Stop the Collector
-```bash
-python -m src.main stop
+# Uninstall hooks cleanly
+telemetry-agent uninstall-hook
 ```
 
 ---
 
 ## Running Tests
 
-Run the full automated test suite (22 unit, lifecycle, privacy, and E2E tests):
-
+Run the full automated test suite:
 ```bash
 pytest tests -v
 ```
 
 ---
 
-## Architecture & Documentation
+## Building Distribution Packages
 
-For detailed architectural diagrams, schema definitions, and investigation notes regarding Antigravity telemetry, see [TELEMETRY_COLLECTOR_V0.md](file:///c:/Users/Dell/Desktop/ai-telemetry-collector/docs/TELEMETRY_COLLECTOR_V0.md).
+```bash
+# Clean previous artifacts
+python -m build
+
+# Validate distributions
+python -m twine check dist/*
+```
