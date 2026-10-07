@@ -1,0 +1,31 @@
+{
+  "telemetry-lifecycle": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "python -m ai_telemetry_agent.integrations.hooks.hook_handler PreInvocation",
+        "timeout": 5
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python -m ai_telemetry_agent.integrations.hooks.hook_handler Stop",
+        "timeout": 5
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m ai_telemetry_agent.integrations.hooks.hook_handler PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
