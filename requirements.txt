@@ -1,0 +1,1 @@
+# Core dependencies: Telemetry Collector V0 utilizes the Python standard library for maximum reliability and zero external bloat.

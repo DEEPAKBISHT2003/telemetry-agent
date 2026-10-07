@@ -1,0 +1,31 @@
+{
+  "telemetry-lifecycle": {
+    "enabled": true,
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "\"C:\\Users\\Dell\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\" src/integrations/hooks/hook_handler.py PreInvocation",
+        "timeout": 5
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "\"C:\\Users\\Dell\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\" src/integrations/hooks/hook_handler.py Stop",
+        "timeout": 5
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:\\Users\\Dell\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe\" src/integrations/hooks/hook_handler.py PreToolUse",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
