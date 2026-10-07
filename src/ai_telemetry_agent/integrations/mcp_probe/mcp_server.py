@@ -29,7 +29,7 @@ def handle_initialize(request_id: Any) -> Dict[str, Any]:
             },
             "serverInfo": {
                 "name": "ai-telemetry-mcp-probe",
-                "version": "0.1.0"
+                "version": "0.1.1"
             }
         }
     }

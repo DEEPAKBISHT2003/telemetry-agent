@@ -18,7 +18,7 @@ class EventProcessor:
     def __init__(
         self,
         identity_provider: IdentityProvider,
-        collector_version: str = "0.1.0",
+        collector_version: str = "0.1.1",
         default_context: Optional[ContextInfo] = None,
     ):
         self.identity_provider = identity_provider

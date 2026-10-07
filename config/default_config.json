@@ -1,7 +1,7 @@
 {
   "member_id": "M001",
   "device_id": "DEV-001",
-  "collector_version": "0.1.0",
+  "collector_version": "0.1.1",
   "log_level": "INFO",
   "heartbeat_interval_seconds": 30,
   "telemetry_data_dir": null,

@@ -186,7 +186,7 @@ class TelemetryEvent:
             event_type=data.get("event_type", ""),
             timestamp=data.get("timestamp", ""),
             collector=CollectorInfo(
-                version=collector_data.get("version", "0.1.0"),
+                version=collector_data.get("version", "0.1.1"),
                 device_id=collector_data.get("device_id", "")
             ),
             identity=IdentityInfo(

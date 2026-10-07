@@ -12,6 +12,14 @@ import sys
 import time
 from typing import Optional
 
+# Prevent sys.path[0] package directory from shadowing Python standard library 'logging'
+_pkg_dir = str(Path(__file__).resolve().parent)
+_src_dir = str(Path(__file__).resolve().parent.parent)
+while _pkg_dir in sys.path:
+    sys.path.remove(_pkg_dir)
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
+
 from ai_telemetry_agent.config.settings import (
     ConfigurationError,
     Settings,
@@ -181,7 +189,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     print("=" * 50)
     print(f"Member ID  : {settings.member_id}")
     print(f"Device ID  : {settings.device_id}")
-    print(f"Storage    : {settings.db_path}")
+    print(f"Storage    : {settings.data_dir}")
     print(f"Antigravity: {ANTIGRAVITY_AI_TELEMETRY_STATUS}")
     print(f"Status     : RUNNING")
     print("=" * 50 + "\n")
@@ -463,11 +471,11 @@ def cmd_hook_status(args: argparse.Namespace) -> None:
     # Check if collector process is running
     try:
         settings = load_settings(env_file=args.env_file)
-        db_path = settings.db_path
+        data_dir = settings.data_dir
     except Exception:
-        db_path = Path.home() / ".telemetry_agent" / "data" / "telemetry.db"
+        data_dir = (get_user_agent_home() / "data").resolve()
 
-    pid_file = db_path.parent / "collector.pid"
+    pid_file = data_dir / "collector.pid"
     collector_running = pid_file.is_file()
 
     print("\n" + "=" * 50)
@@ -546,7 +554,7 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="telemetry-agent",
-        description="Local AI and Engineering Telemetry Agent v0.1.0",
+        description="Local AI and Engineering Telemetry Agent v0.1.1",
     )
     parser.add_argument("--env-file", type=str, default=None, help="Path to .env configuration file")
 
