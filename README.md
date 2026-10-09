@@ -156,9 +156,39 @@ pytest tests -v
 ## Building Distribution Packages
 
 ```bash
-# Clean previous artifacts
+# Clean previous artifacts and build package
 python -m build
 
 # Validate distributions
 python -m twine check dist/*
 ```
+
+---
+
+## Publishing Packages to PyPI / TestPyPI
+
+Secure publishing is configured via local `.env` and `scripts/publish_pypi.py`:
+
+1. **Configure local `.env`** (ignored by Git, never committed):
+   ```env
+   TWINE_USERNAME=__token__
+   TWINE_PASSWORD=
+   ```
+2. **Build and validate package artifacts**:
+   ```bash
+   python -m build
+   python -m twine check dist/*
+   ```
+3. **Run pre-flight check (Dry Run)**:
+   ```bash
+   python scripts/publish_pypi.py --dry-run
+   ```
+4. **Publish**:
+   ```bash
+   # Production PyPI:
+   python scripts/publish_pypi.py
+
+   # TestPyPI:
+   python scripts/publish_pypi.py --repository-url https://test.pypi.org/legacy/
+   ```
+

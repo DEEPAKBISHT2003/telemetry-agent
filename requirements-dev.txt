@@ -1,5 +1,5 @@
-# Development, testing, packaging, and validation dependencies
 pytest>=8.0.0
 pytest-cov>=4.1.0
 build>=1.0.0
 twine>=5.0.0
+python-dotenv>=1.0.0
