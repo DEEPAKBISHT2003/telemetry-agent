@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 SENSITIVE_KEY_PATTERNS = [
     re.compile(r"password", re.IGNORECASE),
     re.compile(r"secret", re.IGNORECASE),
-    re.compile(r"token", re.IGNORECASE),
+    re.compile(r"(?:auth|jwt|access|session|refresh|api|bearer|id|csrf)[_-]?token|^token$", re.IGNORECASE),
     re.compile(r"api[_-]?key", re.IGNORECASE),
     re.compile(r"auth", re.IGNORECASE),
     re.compile(r"private[_-]?key", re.IGNORECASE),

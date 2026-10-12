@@ -55,6 +55,7 @@ class AIEventBuilder:
         duration_ms: Optional[float] = None,
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
+        cache_read_tokens: Optional[int] = None,
         cache_tokens: Optional[int] = None,
         total_tokens: Optional[int] = None,
         cost_usd: Optional[float] = None,
@@ -63,8 +64,9 @@ class AIEventBuilder:
         capture_method: Optional[str] = None,
         repository: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[str] = None,
     ) -> Dict[str, Any]:
-        completed_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        completed_at = timestamp or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         payload = AITelemetryPayload(
             provider=provider,
             model=model,
@@ -75,6 +77,7 @@ class AIEventBuilder:
             duration_ms=duration_ms,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
             cache_tokens=cache_tokens,
             total_tokens=total_tokens,
             cost_usd=cost_usd,
@@ -87,11 +90,53 @@ class AIEventBuilder:
         if repository:
             ctx["repository"] = repository
 
-        return {
+        res: Dict[str, Any] = {
             "event_type": EventType.AI_RUN_COMPLETED,
             "context": ctx,
             "payload": payload.to_dict(),
         }
+        if timestamp:
+            res["timestamp"] = timestamp
+        return res
+
+    @staticmethod
+    def build_generation_event(
+        provider: str = "antigravity",
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
+        cache_read_tokens: Optional[int] = None,
+        total_tokens: Optional[int] = None,
+        timestamp: Optional[str] = None,
+        capture_method: Optional[str] = "sqlite_gen_metadata",
+        repository: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        payload = AITelemetryPayload(
+            provider=provider,
+            model=model,
+            session_id=session_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            total_tokens=total_tokens,
+            cost_usd=None,
+            capture_method=capture_method,
+            metadata=sanitize_data(metadata or {}),
+        )
+        ctx: Dict[str, Any] = {"session_id": session_id}
+        if repository:
+            ctx["repository"] = repository
+
+        res: Dict[str, Any] = {
+            "event_type": EventType.AI_RUN,
+            "context": ctx,
+            "payload": payload.to_dict(),
+        }
+        if timestamp:
+            res["timestamp"] = timestamp
+        return res
 
     @staticmethod
     def build_run_failed(
@@ -340,6 +385,52 @@ class ProxyProvider(AntigravityTelemetryProvider):
         return []
 
 
+class SQLiteTokenProvider(AntigravityTelemetryProvider):
+    """Provider for extracting authoritative token metrics from local Antigravity SQLite databases."""
+
+    def __init__(
+        self,
+        conversations_dirs: Optional[List[Any]] = None,
+        state_file: Optional[Any] = None,
+        sync_historical: bool = False,
+    ):
+        from ai_telemetry_agent.sources.antigravity_sqlite import (
+            AntigravitySQLiteReader,
+            record_to_raw_event,
+        )
+        self._reader = AntigravitySQLiteReader(
+            conversations_dirs=conversations_dirs,
+            state_file=state_file,
+            sync_historical=sync_historical,
+        )
+        self._record_to_raw_event = record_to_raw_event
+
+    @property
+    def capture_method_name(self) -> str:
+        return "sqlite_gen_metadata"
+
+    @property
+    def is_available(self) -> bool:
+        return len(self._reader.discover_databases()) > 0
+
+    @property
+    def reader(self) -> Any:
+        return self._reader
+
+    def collect_events(self) -> List[Dict[str, Any]]:
+        records = self._reader.collect_all_new_records(auto_commit=False)
+        events: List[Dict[str, Any]] = []
+        for rec in records:
+            ev = self._record_to_raw_event(rec)
+            if ev:
+                events.append(ev)
+        return events
+
+    def commit_state(self) -> bool:
+        """Atomically persist staged reader cursor state to disk."""
+        return self._reader.commit_state()
+
+
 class UnsupportedProvider(AntigravityTelemetryProvider):
     """Fallback provider when no capture mechanism is supported."""
 
@@ -353,3 +444,4 @@ class UnsupportedProvider(AntigravityTelemetryProvider):
 
     def collect_events(self) -> List[Dict[str, Any]]:
         return []
+

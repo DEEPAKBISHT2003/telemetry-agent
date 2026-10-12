@@ -352,6 +352,14 @@ def cmd_session(args: argparse.Namespace) -> None:
         print(f"  {', '.join(tools)}")
     else:
         print("  none")
+
+    if s.get("has_token_data"):
+        print("\nToken Usage (Authoritative):")
+        print(f"  Uncached Input Tokens : {s.get('input_tokens', 0):,}")
+        print(f"  Cached Read Tokens    : {s.get('cache_read_tokens', 0):,}")
+        print(f"  Output Tokens         : {s.get('output_tokens', 0):,}")
+        print(f"  Total Tokens          : {s.get('total_tokens', 0):,}")
+
     print("=" * 50 + "\n")
 
 
@@ -554,7 +562,7 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="telemetry-agent",
-        description="Local AI and Engineering Telemetry Agent v0.1.1",
+        description="Local AI and Engineering Telemetry Agent v0.1.2",
     )
     parser.add_argument("--env-file", type=str, default=None, help="Path to .env configuration file")
 

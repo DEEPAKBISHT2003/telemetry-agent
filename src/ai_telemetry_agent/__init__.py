@@ -1,6 +1,6 @@
 """AI Telemetry Agent - Local developer telemetry agent for AI usage and engineering signals."""
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 __package_name__ = "ai-telemetry-agent"
 
 from ai_telemetry_agent.config.settings import Settings, load_settings

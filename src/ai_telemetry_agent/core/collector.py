@@ -19,6 +19,7 @@ from ai_telemetry_agent.sources.antigravity import AntigravitySource
 from ai_telemetry_agent.sources.base import EventSource
 from ai_telemetry_agent.sources.git import GitSource
 from ai_telemetry_agent.sources.system import SystemSource
+from ai_telemetry_agent.storage.base import StoragePersistenceError
 from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 
 logger = get_logger("telemetry.collector")
@@ -52,8 +53,10 @@ class TelemetryCollector:
             poll_interval_seconds=self.settings.git_monitor_interval_seconds,
         )
 
+        state_file = self.settings.data_dir.parent / "state" / "antigravity_sqlite_state.json"
         self.antigravity_source = AntigravitySource(
-            enabled=self.settings.antigravity_monitor_enabled
+            enabled=self.settings.antigravity_monitor_enabled,
+            state_file=state_file,
         )
 
         self.sources: List[EventSource] = [
@@ -160,12 +163,33 @@ class TelemetryCollector:
         for src in self.sources:
             try:
                 raw_events = src.collect()
+                batch_success = True
                 for raw in raw_events:
                     event = self.processor.process_raw(raw)
                     if event:
-                        if self.store.save_event(event):
-                            self._log_event(event, src.name)
-                            collected_count += 1
+                        try:
+                            if self.store.save_event(event):
+                                self._log_event(event, src.name)
+                                collected_count += 1
+                        except (StoragePersistenceError, OSError, IOError) as spe:
+                            logger.error(
+                                "event_persistence_failed",
+                                source=src.name,
+                                event_id=getattr(event, "event_id", None),
+                                error=str(spe),
+                            )
+                            batch_success = False
+                            break
+
+                # Atomically commit staged cursor state ONLY if all events in batch succeeded
+                if batch_success:
+                    if hasattr(src, "commit_state") and callable(src.commit_state):
+                        src.commit_state()
+                else:
+                    logger.warning(
+                        "cursor_commit_aborted_due_to_persistence_failure",
+                        source=src.name,
+                    )
             except Exception as ex:
                 logger.error("source_collect_error", source=src.name, error=str(ex))
 

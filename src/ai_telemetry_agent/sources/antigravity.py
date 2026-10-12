@@ -9,6 +9,7 @@ from ai_telemetry_agent.sources.ai_provider import (
     AntigravityTelemetryProvider,
     HookProvider,
     MCPProvider,
+    SQLiteTokenProvider,
 )
 from ai_telemetry_agent.sources.antigravity_probe import (
     AntigravityCapabilities,
@@ -18,7 +19,7 @@ from ai_telemetry_agent.sources.base import EventSource
 
 logger = get_logger("telemetry.source.antigravity")
 
-ANTIGRAVITY_AI_TELEMETRY_STATUS = "HOOK_SUPPORTED_TOKENS_REQUIRE_GATEWAY"
+ANTIGRAVITY_AI_TELEMETRY_STATUS = "GEN_METADATA_LOCAL_SUPPORTED"
 
 
 class AntigravitySource(EventSource):
@@ -28,7 +29,12 @@ class AntigravitySource(EventSource):
     If metrics are not explicitly provided by a valid integration source, fields remain NULL.
     """
 
-    def __init__(self, enabled: bool = True):
+    def __init__(
+        self,
+        enabled: bool = True,
+        conversations_dirs: Optional[List[Any]] = None,
+        state_file: Optional[Any] = None,
+    ):
         self.enabled = enabled
         self._started = False
         self._buffered_events: List[Dict[str, Any]] = []
@@ -36,6 +42,10 @@ class AntigravitySource(EventSource):
         self._capabilities: Optional[AntigravityCapabilities] = None
         self.hook_provider = HookProvider()
         self.mcp_provider = MCPProvider()
+        self.sqlite_provider = SQLiteTokenProvider(
+            conversations_dirs=conversations_dirs,
+            state_file=state_file,
+        )
 
     @property
     def name(self) -> str:
@@ -102,5 +112,13 @@ class AntigravitySource(EventSource):
         # Collect events from active capture providers
         events.extend(self.hook_provider.collect_events())
         events.extend(self.mcp_provider.collect_events())
+        events.extend(self.sqlite_provider.collect_events())
 
         return events
+
+    def commit_state(self) -> bool:
+        """Commit staged cursor state for underlying providers."""
+        if hasattr(self.sqlite_provider, "commit_state"):
+            return self.sqlite_provider.commit_state()
+        return True
+

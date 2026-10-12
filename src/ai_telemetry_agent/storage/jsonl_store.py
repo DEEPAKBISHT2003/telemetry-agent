@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 from ai_telemetry_agent.config.settings import get_user_agent_home
 from ai_telemetry_agent.core.event import TelemetryEvent
 from ai_telemetry_agent.logging.structured import get_logger
-from ai_telemetry_agent.storage.base import EventStore
+from ai_telemetry_agent.storage.base import EventStore, StoragePersistenceError
 
 logger = get_logger("telemetry.storage.jsonl")
 
@@ -73,8 +73,26 @@ class JSONLEventStore(EventStore):
         filename = self.get_filename_for_timestamp(event.timestamp)
         return self.data_dir / filename
 
+    def _is_id_in_file(self, file_path: Path, event_id: str) -> bool:
+        """Scan a specific JSONL file to check if event_id is already present."""
+        if not file_path.is_file():
+            return False
+        needle = f'"{event_id}"'
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fp:
+                for line in fp:
+                    if needle in line:
+                        return True
+        except Exception:
+            pass
+        return False
+
     def save_event(self, event: TelemetryEvent) -> bool:
-        """Save a single normalized event. Returns True if saved, False if duplicate/error."""
+        """Save a single normalized event. Returns True if newly saved, False if duplicate.
+
+        Raises:
+            StoragePersistenceError: If the event fails to persist to disk.
+        """
         if not event or not event.event_id:
             return False
 
@@ -84,6 +102,11 @@ class JSONLEventStore(EventStore):
                 return False
 
             file_path = self.get_file_path_for_event(event)
+            if self._is_id_in_file(file_path, event.event_id):
+                self._seen_ids.add(event.event_id)
+                logger.warning("duplicate_event_on_disk_ignored", event_id=event.event_id)
+                return False
+
             try:
                 event_dict = event.to_dict()
                 json_str = json.dumps(event_dict, ensure_ascii=False)
@@ -93,9 +116,16 @@ class JSONLEventStore(EventStore):
 
                 self._seen_ids.add(event.event_id)
                 return True
-            except Exception as e:
+            except (OSError, IOError) as e:
                 logger.error("event_save_error", event_id=event.event_id, error=str(e))
-                return False
+                raise StoragePersistenceError(
+                    f"Failed to persist event {event.event_id} to {file_path.name}: {e}"
+                ) from e
+            except Exception as e:
+                logger.error("event_serialization_error", event_id=event.event_id, error=str(e))
+                raise StoragePersistenceError(
+                    f"Failed to serialize/persist event {event.event_id}: {e}"
+                ) from e
 
     def append_event(self, event: TelemetryEvent) -> bool:
         """Convenience alias for save_event."""
@@ -319,12 +349,23 @@ class JSONLEventStore(EventStore):
                                 "branch": ev_branch,
                                 "models": set(),
                                 "model_counts": {},
+                                "sqlite_gen_count": 0,
+                                "gen_model_counts": {},
+                                "completed_runs_count": 0,
+                                "completed_model_counts": {},
+                                "started_runs_count": 0,
+                                "started_model_counts": {},
                                 "started_at": ev.timestamp,
                                 "last_activity_at": ev.timestamp,
                                 "duration_seconds": 0.0,
                                 "ai_runs_count": 0,
                                 "tool_calls_count": 0,
                                 "tools_used": set(),
+                                "input_tokens": 0,
+                                "output_tokens": 0,
+                                "cache_read_tokens": 0,
+                                "total_tokens": 0,
+                                "has_token_data": False,
                             }
 
                         sess = sessions_map[sid]
@@ -340,12 +381,45 @@ class JSONLEventStore(EventStore):
                         p = ev.payload or {}
                         model = p.get("model")
                         etype = ev.event_type
+                        cm = p.get("capture_method")
 
-                        if etype in ("ai_run_started", "ai_run", "ai_run_completed"):
-                            sess["ai_runs_count"] += 1
+                        if etype == "ai_run" or cm == "sqlite_gen_metadata":
+                            sess["sqlite_gen_count"] += 1
                             if model:
                                 sess["models"].add(model)
-                                sess["model_counts"][model] = sess["model_counts"].get(model, 0) + 1
+                                sess["gen_model_counts"][model] = sess["gen_model_counts"].get(model, 0) + 1
+
+                            in_tok = p.get("input_tokens")
+                            out_tok = p.get("output_tokens")
+                            cache_tok = p.get("cache_read_tokens") if p.get("cache_read_tokens") is not None else p.get("cache_tokens")
+                            tot_tok = p.get("total_tokens")
+
+                            has_tok = any(isinstance(v, (int, float)) for v in (in_tok, out_tok, cache_tok, tot_tok))
+                            if has_tok:
+                                sess["has_token_data"] = True
+                                if isinstance(in_tok, (int, float)):
+                                    sess["input_tokens"] += int(in_tok)
+                                if isinstance(out_tok, (int, float)):
+                                    sess["output_tokens"] += int(out_tok)
+                                if isinstance(cache_tok, (int, float)):
+                                    sess["cache_read_tokens"] += int(cache_tok)
+                                if isinstance(tot_tok, (int, float)):
+                                    sess["total_tokens"] += int(tot_tok)
+                                elif isinstance(in_tok, (int, float)) or isinstance(out_tok, (int, float)):
+                                    sess["total_tokens"] += int(in_tok or 0) + int(cache_tok or 0) + int(out_tok or 0)
+
+                        elif etype == "ai_run_completed":
+                            sess["completed_runs_count"] += 1
+                            if model:
+                                sess["models"].add(model)
+                                sess["completed_model_counts"][model] = sess["completed_model_counts"].get(model, 0) + 1
+
+                        elif etype == "ai_run_started":
+                            sess["started_runs_count"] += 1
+                            if model:
+                                sess["models"].add(model)
+                                sess["started_model_counts"][model] = sess["started_model_counts"].get(model, 0) + 1
+
                         elif etype in ("ai_tool_call", "tool_call"):
                             sess["tool_calls_count"] += 1
                             tname = p.get("tool_name")
@@ -367,6 +441,19 @@ class JSONLEventStore(EventStore):
                 s["duration_seconds"] = round((t1 - t0).total_seconds(), 2)
             except Exception:
                 s["duration_seconds"] = 0.0
+
+            # Determine primary run count per model:
+            # 1. If SQLite generation records exist for a model, they represent exact, authoritative model runs.
+            # 2. Otherwise for hook runs, take max(completed, started) to avoid start+stop doubling while capturing incomplete runs.
+            model_counts: Dict[str, int] = {}
+            for m in s["models"]:
+                if s["gen_model_counts"].get(m, 0) > 0:
+                    model_counts[m] = s["gen_model_counts"][m]
+                else:
+                    model_counts[m] = max(s["completed_model_counts"].get(m, 0), s["started_model_counts"].get(m, 0))
+
+            s["model_counts"] = model_counts
+            s["ai_runs_count"] = sum(model_counts.values()) if model_counts else (s["sqlite_gen_count"] or max(s["completed_runs_count"], s["started_runs_count"]))
 
             s["models"] = sorted(list(s["models"]))
             s["model"] = ", ".join(s["models"]) if s["models"] else None

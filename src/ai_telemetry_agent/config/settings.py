@@ -105,7 +105,7 @@ class Settings:
     device_id: str
     member_name: Optional[str] = None
     hostname: Optional[str] = None
-    collector_version: str = "0.1.1"
+    collector_version: str = "0.1.2"
     log_level: str = "INFO"
     heartbeat_interval_seconds: int = 30
     telemetry_data_dir: Optional[str] = None
@@ -216,7 +216,7 @@ def load_settings(
     if errors:
         raise ConfigurationError("Configuration Error:\n" + "\n".join(f"- {err}" for err in errors))
 
-    version = env_vars.get("COLLECTOR_VERSION", "0.1.1").strip()
+    version = env_vars.get("COLLECTOR_VERSION", "0.1.2").strip()
     log_level = env_vars.get("LOG_LEVEL", "INFO").strip().upper()
 
     try:

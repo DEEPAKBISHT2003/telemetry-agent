@@ -9,12 +9,30 @@ else:
     TelemetryEvent = Any
 
 
+class StorageError(Exception):
+    """Base exception for telemetry storage failures."""
+    pass
+
+
+class StoragePersistenceError(StorageError, IOError):
+    """Raised when an event fails to persist to disk due to I/O, serialization, or filesystem errors."""
+    pass
+
+
 class EventStore(ABC):
     """Abstract interface for local event persistence."""
 
     @abstractmethod
     def save_event(self, event: TelemetryEvent) -> bool:
-        """Save a single normalized event. Returns True if saved, False if duplicate/error."""
+        """Save a single normalized event.
+
+        Returns:
+            True: Event newly saved to persistent store.
+            False: Event was already saved (duplicate) and safely ignored.
+
+        Raises:
+            StoragePersistenceError: If writing to disk fails.
+        """
         pass
 
     @abstractmethod
