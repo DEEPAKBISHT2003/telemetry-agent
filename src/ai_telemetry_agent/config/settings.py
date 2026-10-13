@@ -112,6 +112,15 @@ class Settings:
     git_monitor_interval_seconds: int = 10
     git_monitor_paths: List[str] = field(default_factory=lambda: ["."])
     antigravity_monitor_enabled: bool = True
+    telemetry_server_url: Optional[str] = None
+    upload_enabled: bool = False
+    upload_interval_seconds: int = 60
+    upload_timeout_seconds: float = 15.0
+    upload_max_batch_size: int = 500
+    upload_max_batch_bytes: int = 2 * 1024 * 1024
+    upload_max_retries: int = 3
+    upload_backoff_factor: float = 1.5
+    allow_insecure_http: bool = False
 
     @property
     def data_dir(self) -> Path:
@@ -182,7 +191,15 @@ def load_settings(
         "MEMBER_ID", "DEVICE_ID", "COLLECTOR_VERSION", "LOG_LEVEL",
         "HEARTBEAT_INTERVAL_SECONDS", "TELEMETRY_DATA_DIR",
         "GIT_MONITOR_INTERVAL_SECONDS", "GIT_MONITOR_PATHS",
-        "ANTIGRAVITY_MONITOR_ENABLED"
+        "ANTIGRAVITY_MONITOR_ENABLED", "TELEMETRY_SERVER_URL",
+        "TELEMETRY_UPLOAD_ENABLED", "UPLOAD_ENABLED",
+        "TELEMETRY_UPLOAD_INTERVAL_SECONDS", "UPLOAD_INTERVAL_SECONDS",
+        "TELEMETRY_UPLOAD_TIMEOUT_SECONDS", "UPLOAD_TIMEOUT_SECONDS",
+        "TELEMETRY_UPLOAD_MAX_BATCH_SIZE", "UPLOAD_MAX_BATCH_SIZE",
+        "TELEMETRY_UPLOAD_MAX_BATCH_BYTES", "UPLOAD_MAX_BATCH_BYTES",
+        "TELEMETRY_UPLOAD_MAX_RETRIES", "UPLOAD_MAX_RETRIES",
+        "TELEMETRY_UPLOAD_BACKOFF_FACTOR", "UPLOAD_BACKOFF_FACTOR",
+        "TELEMETRY_ALLOW_INSECURE_HTTP", "ALLOW_INSECURE_HTTP",
     ]:
         val = os.environ.get(key)
         if val is not None:
@@ -245,6 +262,53 @@ def load_settings(
     else:
         ag_enabled = str(ag_enabled_raw).strip().lower() in ("true", "1", "yes", "t")
 
+    # Uploader configuration & validation
+    server_url = env_vars.get("TELEMETRY_SERVER_URL", "").strip() or None
+
+    upload_enabled_raw = env_vars.get("TELEMETRY_UPLOAD_ENABLED", env_vars.get("UPLOAD_ENABLED", "false"))
+    if isinstance(upload_enabled_raw, bool):
+        upload_enabled = upload_enabled_raw
+    else:
+        upload_enabled = str(upload_enabled_raw).strip().lower() in ("true", "1", "yes", "t")
+
+    try:
+        upload_interval = max(1, int(env_vars.get("TELEMETRY_UPLOAD_INTERVAL_SECONDS", env_vars.get("UPLOAD_INTERVAL_SECONDS", 60))))
+    except ValueError:
+        upload_interval = 60
+
+    try:
+        upload_timeout = max(1.0, float(env_vars.get("TELEMETRY_UPLOAD_TIMEOUT_SECONDS", env_vars.get("UPLOAD_TIMEOUT_SECONDS", 15.0))))
+    except ValueError:
+        upload_timeout = 15.0
+
+    try:
+        raw_batch_size = int(env_vars.get("TELEMETRY_UPLOAD_MAX_BATCH_SIZE", env_vars.get("UPLOAD_MAX_BATCH_SIZE", 500)))
+        upload_max_batch_size = max(1, min(500, raw_batch_size))
+    except ValueError:
+        upload_max_batch_size = 500
+
+    try:
+        raw_max_bytes = int(env_vars.get("TELEMETRY_UPLOAD_MAX_BATCH_BYTES", env_vars.get("UPLOAD_MAX_BATCH_BYTES", 2 * 1024 * 1024)))
+        upload_max_batch_bytes = max(1024, min(2 * 1024 * 1024, raw_max_bytes))
+    except ValueError:
+        upload_max_batch_bytes = 2 * 1024 * 1024
+
+    try:
+        upload_max_retries = max(0, int(env_vars.get("TELEMETRY_UPLOAD_MAX_RETRIES", env_vars.get("UPLOAD_MAX_RETRIES", 3))))
+    except ValueError:
+        upload_max_retries = 3
+
+    try:
+        upload_backoff = max(1.0, float(env_vars.get("TELEMETRY_UPLOAD_BACKOFF_FACTOR", env_vars.get("UPLOAD_BACKOFF_FACTOR", 1.5))))
+    except ValueError:
+        upload_backoff = 1.5
+
+    allow_insecure_raw = env_vars.get("TELEMETRY_ALLOW_INSECURE_HTTP", env_vars.get("ALLOW_INSECURE_HTTP", "false"))
+    if isinstance(allow_insecure_raw, bool):
+        allow_insecure = allow_insecure_raw
+    else:
+        allow_insecure = str(allow_insecure_raw).strip().lower() in ("true", "1", "yes", "t")
+
     return Settings(
         member_id=final_member_id,
         device_id=final_device_id,
@@ -257,4 +321,13 @@ def load_settings(
         git_monitor_interval_seconds=git_interval,
         git_monitor_paths=git_paths,
         antigravity_monitor_enabled=ag_enabled,
+        telemetry_server_url=server_url,
+        upload_enabled=upload_enabled,
+        upload_interval_seconds=upload_interval,
+        upload_timeout_seconds=upload_timeout,
+        upload_max_batch_size=upload_max_batch_size,
+        upload_max_batch_bytes=upload_max_batch_bytes,
+        upload_max_retries=upload_max_retries,
+        upload_backoff_factor=upload_backoff,
+        allow_insecure_http=allow_insecure,
     )

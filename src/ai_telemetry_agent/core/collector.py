@@ -68,6 +68,10 @@ class TelemetryCollector:
         self._running = False
         self._worker_thread: Optional[threading.Thread] = None
         self._pid_file = self.settings.data_dir / "collector.pid"
+        self._uploader_daemon = None
+        if getattr(self.settings, "upload_enabled", False):
+            from ai_telemetry_agent.uploader.uploader import UploaderDaemon
+            self._uploader_daemon = UploaderDaemon(settings=self.settings)
 
     def _write_pid_file(self) -> None:
         try:
@@ -113,6 +117,13 @@ class TelemetryCollector:
         # Initial poll to register startup and detection events
         self.poll_and_process()
 
+        # Start uploader daemon if enabled
+        if self._uploader_daemon:
+            try:
+                self._uploader_daemon.start()
+            except Exception as ex:
+                logger.error("uploader_daemon_start_error", error=str(ex))
+
         logger.info(
             "collector_started",
             member_id=member_id,
@@ -131,6 +142,13 @@ class TelemetryCollector:
             member_id=self.identity_provider.get_current_member(),
             device_id=self.identity_provider.get_device_id(),
         )
+
+        # Stop background uploader daemon if running
+        if self._uploader_daemon:
+            try:
+                self._uploader_daemon.stop()
+            except Exception as ex:
+                logger.error("uploader_daemon_stop_error", error=str(ex))
 
         # Stop sources (this produces collector_stopped event in system source)
         for src in self.sources:

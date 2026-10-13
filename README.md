@@ -263,6 +263,16 @@ python scripts/publish_pypi.py
 
 ---
 
+## Technical Documentation
+
+For in-depth architectural and implementation specifications:
+
+- **[Architecture Specification](docs/architecture.md)**: Local agent, centralized backend, end-to-end flows, and Mermaid diagrams.
+- **[Lifecycle Hooks & Token Accounting](docs/lifecycle-hooks-and-token-accounting.md)**: Antigravity hook IPC contract, Protobuf decoding, exact token formulas, and session correlation.
+- **[PyPI Publishing & Architecture Decisions](docs/pypi-publishing-and-architecture-decisions.md)**: Packaging workflow, verification evidence, and comparative analysis of Python agents vs. native IDE extensions.
+
+---
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

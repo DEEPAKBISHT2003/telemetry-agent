@@ -53,12 +53,19 @@ data/
 *.sqlite3
 *.pid
 collector.pid
+uploader.lock
 *.jsonl
+*.tmp
+*.bak
+*.log
+logs/
 
-# Local agent home and identity files
+# Local agent home, identity, and enrollment files
 .telemetry_agent/
 identity.json
 device_id
+enrollment.json
+uploader_checkpoint.json
 
 # Environment variables and secrets
 .env
@@ -66,6 +73,7 @@ device_id
 *.env
 !.env.example
 !example.env
+!**/.env.example
 
 # Antigravity & AI IDE local runtime caches
 .agents/
@@ -80,6 +88,15 @@ device_id
 .project
 .pydevproject
 .settings/
+
+# Node / Frontend artifacts
+node_modules/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Operating system files
 .DS_Store

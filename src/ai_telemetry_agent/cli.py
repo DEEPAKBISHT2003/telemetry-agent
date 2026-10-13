@@ -4,6 +4,7 @@ Provides commands to start, inspect, configure, and install the local AI telemet
 """
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -45,6 +46,10 @@ from ai_telemetry_agent.integrations.hooks.installer import (
 from ai_telemetry_agent.sources.antigravity import ANTIGRAVITY_AI_TELEMETRY_STATUS
 from ai_telemetry_agent.storage.base import EventStore
 from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
+from ai_telemetry_agent.uploader.checkpoint import CheckpointManager
+from ai_telemetry_agent.uploader.client import BackendClient, UploaderClientError
+from ai_telemetry_agent.uploader.credentials import CredentialStore, EnrollmentMetadata
+from ai_telemetry_agent.uploader.uploader import TelemetryUploader, UploaderDaemon
 
 
 def _safe_print(text: str = "", **kwargs) -> None:
@@ -559,6 +564,181 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
     print("=" * 50 + "\n")
 
 
+def cmd_enroll(args: argparse.Namespace) -> None:
+    """Enroll device with centralized backend using single-use enrollment token."""
+    server_url = (getattr(args, "server", None) or "").strip()
+    enrollment_token = (getattr(args, "token", None) or "").strip()
+    allow_insecure = bool(getattr(args, "allow_insecure_http", False))
+
+    if not server_url:
+        print("Error: --server URL is required (e.g. https://telemetry.yourorg.com)", file=sys.stderr)
+        sys.exit(1)
+    if not enrollment_token:
+        print("Error: --token is required", file=sys.stderr)
+        sys.exit(1)
+
+    print("\n" + "=" * 50)
+    print("AI Telemetry Agent — Device Enrollment")
+    print("=" * 50)
+    print(f"Server URL: {server_url}")
+
+    user_home = get_user_agent_home()
+    cred_store = CredentialStore(custom_home=user_home)
+
+    client = BackendClient(
+        server_url=server_url,
+        allow_insecure_http=allow_insecure,
+    )
+
+    hostname = detect_hostname()
+    platform_name = f"{platform.system()} {platform.release()}"
+    hardware_uuid = get_or_create_device_id(custom_home=user_home)
+
+    print(f"Hostname   : {hostname}")
+    print(f"Platform   : {platform_name}")
+    print(f"Device UUID: {hardware_uuid}")
+    print("\nSubmitting enrollment claim...")
+
+    try:
+        claim_resp = client.claim_enrollment(
+            enrollment_token=enrollment_token,
+            hardware_uuid=hardware_uuid,
+            hostname=hostname,
+            platform_name=platform_name,
+            agent_version="0.1.2",
+        )
+    except UploaderClientError as uce:
+        print(f"\nEnrollment claim failed: {uce}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as ex:
+        print(f"\nUnexpected error claiming enrollment: {ex}", file=sys.stderr)
+        sys.exit(1)
+
+    credential_token = claim_resp.get("device_credential") or claim_resp.get("credential_token")
+    if not credential_token:
+        print("\nError: Server response missing device credential token.", file=sys.stderr)
+        sys.exit(1)
+
+    device_info = claim_resp.get("device") if isinstance(claim_resp.get("device"), dict) else {}
+    dev_info = claim_resp.get("developer") if isinstance(claim_resp.get("developer"), dict) else {}
+    org_id = str(claim_resp.get("organization_id") or dev_info.get("organization_id", ""))
+    dev_id = str(claim_resp.get("developer_id") or dev_info.get("developer_id", ""))
+    device_id = str(claim_resp.get("device_id") or device_info.get("device_id", ""))
+    token_prefix = str(claim_resp.get("token_prefix", ""))
+    enrolled_at = str(claim_resp.get("enrolled_at") or claim_resp.get("claimed_at") or datetime.now(timezone.utc).isoformat())
+    expires_at = claim_resp.get("expires_at")
+
+    metadata = EnrollmentMetadata(
+        server_url=server_url,
+        organization_id=org_id,
+        developer_id=dev_id,
+        device_id=device_id,
+        token_prefix=token_prefix,
+        enrolled_at=enrolled_at,
+        expires_at=expires_at,
+        hardware_uuid=hardware_uuid,
+    )
+
+    cred_store.save_credential(token=credential_token, metadata=metadata)
+
+    # Verify device authentication against GET /api/v1/devices/me
+    print("Verifying device credentials...")
+    try:
+        client.verify_device_identity(credential_token)
+        print("✓ Verification succeeded.")
+    except Exception as ex:
+        print(f"Warning: Identity verification failed: {ex}", file=sys.stderr)
+
+    print("\n" + "=" * 50)
+    print("✓ Device Enrollment Complete!")
+    print(f"Developer ID : {dev_id}")
+    print(f"Device ID    : {device_id}")
+    print(f"Token Prefix : {token_prefix}")
+    print(f"Status       : Enrolled and Securely Persisted")
+    print("=" * 50 + "\n")
+
+
+def cmd_upload(args: argparse.Namespace) -> None:
+    """Upload pending telemetry to central server."""
+    is_daemon = bool(getattr(args, "daemon", False))
+    override_server = getattr(args, "server", None)
+    allow_insecure = bool(getattr(args, "allow_insecure_http", False))
+
+    settings = load_settings()
+    if override_server:
+        object.__setattr__(settings, "telemetry_server_url", override_server)
+    if allow_insecure:
+        object.__setattr__(settings, "allow_insecure_http", True)
+
+    uploader = TelemetryUploader(settings=settings)
+
+    if is_daemon:
+        print("\n" + "=" * 50)
+        print("AI Telemetry Agent — Starting Background Uploader")
+        print("=" * 50)
+        print(f"Interval: {settings.upload_interval_seconds}s")
+        print("Press Ctrl+C to terminate cleanly.\n")
+
+        daemon = UploaderDaemon(uploader=uploader)
+        daemon.start()
+
+        def _handle_shutdown(signum, frame):
+            print("\nShutting down uploader daemon...")
+            daemon.stop()
+            sys.exit(0)
+
+        import signal
+        try:
+            signal.signal(signal.SIGINT, _handle_shutdown)
+            signal.signal(signal.SIGTERM, _handle_shutdown)
+        except Exception:
+            pass
+
+        try:
+            while daemon.is_alive():
+                time.sleep(1.0)
+        except KeyboardInterrupt:
+            daemon.stop()
+    else:
+        print("\n" + "=" * 50)
+        print("AI Telemetry Agent — Telemetry Upload (Single Pass)")
+        print("=" * 50)
+        res = uploader.upload_cycle(force=True)
+        print(f"Status           : {res.status}")
+        print(f"Batches Sent     : {res.batches_submitted}")
+        print(f"Events Uploaded  : {res.events_submitted}")
+        print(f"Newly Persisted  : {res.newly_persisted_count}")
+        print(f"Duplicates       : {res.duplicate_count}")
+        if res.error_message:
+            print(f"Message/Error    : {res.error_message}")
+        print("=" * 50 + "\n")
+        if res.status in ("AUTH_ERROR", "ERROR"):
+            sys.exit(1)
+
+
+def cmd_upload_status(args: argparse.Namespace) -> None:
+    """Display upload synchronization and enrollment status."""
+    settings = load_settings()
+    uploader = TelemetryUploader(settings=settings)
+    status = uploader.get_status()
+
+    if getattr(args, "json", False):
+        print(json.dumps(status, indent=2))
+        return
+
+    print("\n" + "=" * 50)
+    print("AI Telemetry Agent — Upload & Enrollment Status")
+    print("=" * 50)
+    print(f"Automatic Upload Enabled : {'Yes' if status['upload_enabled'] else 'No'}")
+    print(f"Device Enrolled          : {'Yes' if status['enrolled'] else 'No'}")
+    print(f"Server URL               : {status['server_url'] or '(not configured)'}")
+    print(f"Device ID                : {status['device_id']}")
+    print(f"Member ID                : {status['member_id']}")
+    print(f"Pending Events Estimate  : {status['estimated_pending_events']}")
+    print(f"Tracked JSONL Files      : {status['files_tracked']}")
+    print("=" * 50 + "\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="telemetry-agent",
@@ -626,6 +806,21 @@ def build_parser() -> argparse.ArgumentParser:
     # Stop command
     subparsers.add_parser("stop", help="Stop the running collector")
 
+    # Phase 5.8: Central telemetry upload & enrollment commands
+    p_enroll = subparsers.add_parser("enroll", help="Enroll this device with the central telemetry backend")
+    p_enroll.add_argument("--server", "-s", type=str, required=True, help="Central telemetry server URL (e.g. https://telemetry.internal)")
+    p_enroll.add_argument("--token", "-t", type=str, required=True, help="Single-use enrollment token")
+    p_enroll.add_argument("--allow-insecure-http", action="store_true", help="Allow unencrypted HTTP (dev/testing only)")
+
+    p_upload = subparsers.add_parser("upload", help="Upload pending telemetry to central server")
+    p_upload.add_argument("--once", action="store_true", help="Execute a single upload cycle and exit (default)")
+    p_upload.add_argument("--daemon", action="store_true", help="Run uploader continuously in background loop")
+    p_upload.add_argument("--server", type=str, default=None, help="Override server URL")
+    p_upload.add_argument("--allow-insecure-http", action="store_true", help="Allow unencrypted HTTP")
+
+    p_up_status = subparsers.add_parser("upload-status", help="Show upload synchronization and enrollment status")
+    p_up_status.add_argument("--json", action="store_true", help="Output raw JSON")
+
     return parser
 
 
@@ -670,6 +865,12 @@ def cli_entrypoint() -> None:
         cmd_uninstall_hook(args)
     elif args.command == "stop":
         cmd_stop(args)
+    elif args.command == "enroll":
+        cmd_enroll(args)
+    elif args.command == "upload":
+        cmd_upload(args)
+    elif args.command == "upload-status":
+        cmd_upload_status(args)
 
 
 if __name__ == "__main__":
