@@ -447,19 +447,60 @@ class TelemetryUploader:
 class UploaderDaemon:
     """Managed background worker thread for automatic periodic telemetry uploads."""
 
-    def __init__(self, uploader: Optional[TelemetryUploader] = None, settings: Optional[Settings] = None):
+    def __init__(
+        self,
+        uploader: Optional[TelemetryUploader] = None,
+        settings: Optional[Settings] = None,
+        daemon_lock_path: Optional[Path] = None,
+        custom_home: Optional[Path] = None,
+    ):
         self.uploader = uploader or TelemetryUploader(settings=settings)
         self.settings = self.uploader.settings
+        self.home = (
+            Path(custom_home).resolve()
+            if custom_home is not None
+            else getattr(self.uploader.credential_store, "home", self.settings.app_data_dir)
+        )
+        self.daemon_lock_path = (
+            Path(daemon_lock_path).resolve()
+            if daemon_lock_path is not None
+            else (self.home / "uploader_daemon.lock").resolve()
+        )
+        self.daemon_lock = UploaderFileLock(self.daemon_lock_path)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._running = False
+        self.status: str = "STOPPED"
 
-    def start(self) -> None:
-        """Start the background uploader worker thread."""
+
+    def start(self) -> bool:
+        """Start the background uploader worker thread.
+
+        Returns:
+            bool: True if started successfully, False if another daemon is already running.
+        """
         if self._running:
-            return
+            return True
+
+        # Acquire process-level daemon lock to prevent duplicate concurrent daemons
+        try:
+            self.daemon_lock.acquire()
+        except UploaderLockError:
+            self.status = "ALREADY_RUNNING"
+            logger.warning(
+                "uploader_daemon_already_running",
+                msg=f"Another daemon holds lock on '{self.daemon_lock_path}'",
+            )
+            return False
+
+        try:
+            # Write daemon PID to uploader_daemon.pid for operational visibility
+            (self.home / "uploader_daemon.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+        except Exception:
+            pass
 
         self._running = True
+        self.status = "RUNNING"
         self._stop_event.clear()
         self._thread = threading.Thread(
             target=self._worker_loop,
@@ -472,10 +513,11 @@ class UploaderDaemon:
             interval_seconds=self.settings.upload_interval_seconds,
             server_url=self.settings.telemetry_server_url,
         )
+        return True
 
     def stop(self, timeout: float = 10.0) -> None:
         """Signal the background worker thread to terminate cleanly and wait for it."""
-        if not self._running:
+        if not self._running and self.status != "RUNNING":
             return
 
         self._running = False
@@ -483,6 +525,18 @@ class UploaderDaemon:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
         self._thread = None
+
+        try:
+            self.daemon_lock.release()
+        except Exception:
+            pass
+
+        try:
+            (self.home / "uploader_daemon.pid").unlink(missing_ok=True)
+        except Exception:
+            pass
+
+        self.status = "STOPPED"
         logger.info("uploader_daemon_stopped")
 
     def is_alive(self) -> bool:
@@ -493,26 +547,54 @@ class UploaderDaemon:
         """Periodic background sweep loop."""
         interval = max(1.0, float(self.settings.upload_interval_seconds))
 
-        # Initial small delay to let collector startup finish
-        if self._stop_event.wait(timeout=2.0):
-            return
+        try:
+            # Initial small delay to let collector startup finish
+            if self._stop_event.wait(timeout=2.0):
+                return
 
-        while self._running and not self._stop_event.is_set():
+            while self._running and not self._stop_event.is_set():
+                try:
+                    res = self.uploader.upload_cycle()
+                    if res.status == "SUCCESS":
+                        logger.info(
+                            "upload_cycle_success",
+                            batches=res.batches_submitted,
+                            events=res.events_submitted,
+                            persisted=res.newly_persisted_count,
+                            duplicates=res.duplicate_count,
+                        )
+                    elif res.status in ("AUTH_ERROR", "ERROR"):
+                        logger.warning("upload_cycle_issue", status=res.status, error=res.error_message)
+                except Exception as ex:
+                    logger.error("uploader_daemon_unhandled_exception", error=str(ex))
+
+                # Sleep for interval or until stopped (uploader.lock is NOT held while sleeping)
+                if self._stop_event.wait(timeout=interval):
+                    break
+        finally:
+            self._running = False
             try:
-                res = self.uploader.upload_cycle()
-                if res.status == "SUCCESS":
-                    logger.info(
-                        "upload_cycle_success",
-                        batches=res.batches_submitted,
-                        events=res.events_submitted,
-                        persisted=res.newly_persisted_count,
-                        duplicates=res.duplicate_count,
-                    )
-                elif res.status in ("AUTH_ERROR", "ERROR"):
-                    logger.warning("upload_cycle_issue", status=res.status, error=res.error_message)
-            except Exception as ex:
-                logger.error("uploader_daemon_unhandled_exception", error=str(ex))
+                self.daemon_lock.release()
+            except Exception:
+                pass
+            try:
+                (self.home / "uploader_daemon.pid").unlink(missing_ok=True)
+            except Exception:
+                pass
+            if self.status != "STOPPED":
+                self.status = "STOPPED"
 
-            # Sleep for interval or until stopped
-            if self._stop_event.wait(timeout=interval):
-                break
+
+def is_daemon_running(custom_home: Optional[Path] = None) -> bool:
+    """Check whether a background uploader daemon process is actively running."""
+    home = (custom_home or get_user_agent_home()).resolve()
+    lock_path = home / "uploader_daemon.lock"
+    lock = UploaderFileLock(lock_path)
+    try:
+        lock.acquire()
+        lock.release()
+        return False
+    except UploaderLockError:
+        return True
+    except Exception:
+        return False

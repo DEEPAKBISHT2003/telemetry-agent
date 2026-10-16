@@ -4,6 +4,7 @@ from ai_telemetry_agent.logging.structured import (
     get_logger,
     sanitize_data,
     setup_structured_logging,
+    setup_daemon_logging,
     REDACTED_STR,
 )
 
@@ -13,5 +14,7 @@ __all__ = [
     "get_logger",
     "sanitize_data",
     "setup_structured_logging",
+    "setup_daemon_logging",
     "REDACTED_STR",
 ]
+

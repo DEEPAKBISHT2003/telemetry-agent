@@ -20,12 +20,15 @@ from ai_telemetry_agent.uploader.client import (
     scrub_client_event,
 )
 from ai_telemetry_agent.uploader.credentials import CredentialStore, EnrollmentMetadata
+from ai_telemetry_agent.uploader.service import ServiceError, WindowsTaskSchedulerManager
+from ai_telemetry_agent.uploader.trigger import maybe_trigger_upload, spawn_detached_uploader
 from ai_telemetry_agent.uploader.uploader import (
     TelemetryUploader,
     UploaderDaemon,
     UploaderFileLock,
     UploaderLockError,
     UploadCycleResult,
+    is_daemon_running,
 )
 
 __all__ = [
@@ -46,4 +49,9 @@ __all__ = [
     "UploaderFileLock",
     "UploaderLockError",
     "UploadCycleResult",
+    "maybe_trigger_upload",
+    "spawn_detached_uploader",
+    "WindowsTaskSchedulerManager",
+    "ServiceError",
+    "is_daemon_running",
 ]

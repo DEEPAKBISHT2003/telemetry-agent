@@ -106,6 +106,49 @@ def setup_structured_logging(level_name: str = "INFO") -> None:
     root.propagate = False
 
 
+def setup_daemon_logging(
+    log_file: Optional[Any] = None,
+    max_bytes: int = 5 * 1024 * 1024,
+    backup_count: int = 3,
+    level_name: str = "INFO",
+) -> None:
+    """Configure root logger with structured formatting and rotating file handler for daemon."""
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path
+
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    root = logging.getLogger("telemetry")
+    root.setLevel(level)
+
+    if log_file is None:
+        from ai_telemetry_agent.config.settings import get_user_agent_home
+        log_path = get_user_agent_home() / "uploader_daemon.log"
+    else:
+        log_path = Path(log_file)
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    has_file = any(isinstance(h, RotatingFileHandler) for h in root.handlers)
+    if not has_file:
+        file_handler = RotatingFileHandler(
+            str(log_path),
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(StructuredFormatter())
+        root.addHandler(file_handler)
+
+    has_stream = any(isinstance(h, logging.StreamHandler) and not isinstance(h, RotatingFileHandler) for h in root.handlers)
+    if not has_stream:
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(StructuredFormatter())
+        root.addHandler(stream_handler)
+
+    root.propagate = False
+
+
 def get_logger(name: str = "telemetry") -> LogEvent:
     """Get a structured logger instance."""
     return LogEvent(logging.getLogger(name))
+

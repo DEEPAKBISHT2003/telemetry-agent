@@ -5,6 +5,7 @@ Provides commands to start, inspect, configure, and install the local AI telemet
 
 import argparse
 from datetime import datetime, timezone
+import getpass
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import platform
 import sys
 import time
 from typing import Optional
+import urllib.parse
 
 # Prevent sys.path[0] package directory from shadowing Python standard library 'logging'
 _pkg_dir = str(Path(__file__).resolve().parent)
@@ -27,6 +29,7 @@ from ai_telemetry_agent.config.settings import (
     get_or_create_device_id,
     get_user_agent_home,
     load_settings,
+    save_user_config,
 )
 from ai_telemetry_agent.core.collector import TelemetryCollector
 from ai_telemetry_agent.core.identity import (
@@ -44,12 +47,15 @@ from ai_telemetry_agent.integrations.hooks.installer import (
     uninstall_global_hooks,
 )
 from ai_telemetry_agent.sources.antigravity import ANTIGRAVITY_AI_TELEMETRY_STATUS
+from ai_telemetry_agent.logging.structured import setup_daemon_logging
 from ai_telemetry_agent.storage.base import EventStore
 from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 from ai_telemetry_agent.uploader.checkpoint import CheckpointManager
 from ai_telemetry_agent.uploader.client import BackendClient, UploaderClientError
 from ai_telemetry_agent.uploader.credentials import CredentialStore, EnrollmentMetadata
-from ai_telemetry_agent.uploader.uploader import TelemetryUploader, UploaderDaemon
+from ai_telemetry_agent.uploader.service import WindowsTaskSchedulerManager, ServiceError
+from ai_telemetry_agent.uploader.uploader import TelemetryUploader, UploaderDaemon, is_daemon_running
+
 
 
 def _safe_print(text: str = "", **kwargs) -> None:
@@ -673,6 +679,7 @@ def cmd_upload(args: argparse.Namespace) -> None:
     uploader = TelemetryUploader(settings=settings)
 
     if is_daemon:
+        setup_daemon_logging(level_name=settings.log_level)
         print("\n" + "=" * 50)
         print("AI Telemetry Agent — Starting Background Uploader")
         print("=" * 50)
@@ -680,7 +687,14 @@ def cmd_upload(args: argparse.Namespace) -> None:
         print("Press Ctrl+C to terminate cleanly.\n")
 
         daemon = UploaderDaemon(uploader=uploader)
-        daemon.start()
+        started = daemon.start()
+        if not started:
+            if daemon.status == "ALREADY_RUNNING":
+                print("Notice: Telemetry uploader daemon is already running (instance lock held). Exiting.")
+                sys.exit(0)
+            else:
+                print(f"Error: Failed to start uploader daemon: {daemon.status}")
+                sys.exit(1)
 
         def _handle_shutdown(signum, frame):
             print("\nShutting down uploader daemon...")
@@ -717,10 +731,29 @@ def cmd_upload(args: argparse.Namespace) -> None:
 
 
 def cmd_upload_status(args: argparse.Namespace) -> None:
-    """Display upload synchronization and enrollment status."""
+    """Display upload synchronization, enrollment, and background service status."""
+    custom_home = Path(args.custom_home).resolve() if getattr(args, "custom_home", None) else None
+    user_home = custom_home if custom_home is not None else get_user_agent_home()
+
     settings = load_settings()
     uploader = TelemetryUploader(settings=settings)
     status = uploader.get_status()
+
+    daemon_active = is_daemon_running(custom_home=user_home)
+    status["daemon_running"] = daemon_active
+
+    svc_manager = WindowsTaskSchedulerManager(custom_home=user_home)
+    try:
+        svc_info = svc_manager.status()
+    except Exception as ex:
+        svc_info = {
+            "platform": platform.system(),
+            "supported": platform.system() == "Windows",
+            "installed": False,
+            "registered": False,
+            "error": str(ex),
+        }
+    status["background_service"] = svc_info
 
     if getattr(args, "json", False):
         print(json.dumps(status, indent=2))
@@ -736,17 +769,450 @@ def cmd_upload_status(args: argparse.Namespace) -> None:
     print(f"Member ID                : {status['member_id']}")
     print(f"Pending Events Estimate  : {status['estimated_pending_events']}")
     print(f"Tracked JSONL Files      : {status['files_tracked']}")
+    print(f"Daemon Process Running   : {'Yes' if daemon_active else 'No'}")
+    if svc_info.get("supported"):
+        print(f"Background Task (Service):")
+        print(f"  Registered             : {'Yes' if svc_info.get('registered') or svc_info.get('installed') else 'No'}")
+        print(f"  State                  : {svc_info.get('state', 'Unknown')}")
+        if svc_info.get("last_run_time"):
+            print(f"  Last Run Time          : {svc_info.get('last_run_time')}")
+        if svc_info.get("last_result"):
+            print(f"  Last Run Result        : {svc_info.get('last_result')}")
+    else:
+        print(f"Background Task (Service): Not supported on {platform.system()}")
     print("=" * 50 + "\n")
+
+
+def cmd_service(args: argparse.Namespace) -> None:
+    """Manage persistent Windows background uploader service."""
+    action = getattr(args, "service_action", None)
+    if not action:
+        _safe_print("Error: service action required (install, uninstall, status, start, stop, restart)", file=sys.stderr)
+        sys.exit(1)
+
+    custom_home = Path(args.custom_home).resolve() if getattr(args, "custom_home", None) else None
+    user_home = custom_home if custom_home is not None else get_user_agent_home()
+
+    manager = WindowsTaskSchedulerManager(custom_home=user_home)
+
+    if action == "install":
+        start_after = bool(getattr(args, "start", False))
+        _safe_print("Installing Windows background uploader task...")
+        ok, msg = manager.install(start=start_after)
+        if not ok:
+            _safe_print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        _safe_print(f"✓ {msg}")
+
+    elif action == "uninstall":
+        _safe_print("Uninstalling Windows background uploader task...")
+        ok, msg = manager.uninstall()
+        if not ok:
+            _safe_print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        _safe_print(f"✓ {msg}")
+
+    elif action == "status":
+        svc_status = manager.status()
+        if getattr(args, "json", False):
+            print(json.dumps(svc_status, indent=2))
+        else:
+            _safe_print("\n" + "=" * 50)
+            _safe_print("AI Telemetry Agent — Windows Background Service Status")
+            _safe_print("=" * 50)
+            _safe_print(f"Task Name              : {svc_status.get('task_name', manager.task_name)}")
+            _safe_print(f"Platform Supported     : {'Yes' if svc_status.get('supported') else 'No'}")
+            _safe_print(f"Registered             : {'Yes' if svc_status.get('registered') or svc_status.get('installed') else 'No'}")
+            _safe_print(f"State                  : {svc_status.get('state', 'Unknown')}")
+            _safe_print(f"Enabled                : {'Yes' if svc_status.get('enabled') else 'No'}")
+            _safe_print(f"Daemon Process Running : {'Yes' if svc_status.get('is_daemon_running') else 'No'}")
+            if svc_status.get("last_run_time"):
+                _safe_print(f"Last Run Time          : {svc_status.get('last_run_time')}")
+            if svc_status.get("last_result"):
+                _safe_print(f"Last Run Result        : {svc_status.get('last_result')}")
+            if svc_status.get("next_run_time"):
+                _safe_print(f"Next Run Time          : {svc_status.get('next_run_time')}")
+            if svc_status.get("error"):
+                _safe_print(f"Error                  : {svc_status.get('error')}")
+            _safe_print("=" * 50 + "\n")
+
+    elif action == "start":
+        _safe_print(f"Starting task '{manager.task_name}'...")
+        ok, msg = manager.start()
+        if not ok:
+            _safe_print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        _safe_print(f"✓ {msg}")
+
+    elif action == "stop":
+        _safe_print(f"Stopping task '{manager.task_name}'...")
+        ok, msg = manager.stop()
+        if not ok:
+            _safe_print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        _safe_print(f"✓ {msg}")
+
+    elif action == "restart":
+        _safe_print(f"Restarting task '{manager.task_name}'...")
+        ok, msg = manager.restart()
+        if not ok:
+            _safe_print(f"Error: {msg}", file=sys.stderr)
+            sys.exit(1)
+        _safe_print(f"✓ {msg}")
+
+    else:
+        _safe_print(f"Error: Unknown service action '{action}'.", file=sys.stderr)
+        sys.exit(1)
+
+
+
+def cmd_setup(args: argparse.Namespace) -> None:
+    """Interactive first-run wizard to configure developer identity, enroll device, install hooks, and configure uploading."""
+    custom_home = Path(args.custom_home).resolve() if getattr(args, "custom_home", None) else None
+    user_home = custom_home if custom_home is not None else get_user_agent_home()
+    user_home.mkdir(parents=True, exist_ok=True)
+
+    cred_store = CredentialStore(custom_home=user_home)
+    existing_ident = get_identity(custom_home=user_home)
+    meta = cred_store.load_metadata()
+    already_enrolled = cred_store.has_credential()
+
+    _safe_print("\n" + "=" * 55)
+    _safe_print("       AI Telemetry Agent — First-Run Setup")
+    _safe_print("=" * 55)
+
+    auto_yes = bool(getattr(args, "yes", False))
+    re_enroll = True
+
+    # 1. Existing enrollment check
+    if already_enrolled:
+        _safe_print("\n✓ Device is already enrolled with a telemetry server:")
+        if meta and meta.server_url:
+            _safe_print(f"  Server URL      : {meta.server_url}")
+        if meta and meta.organization_id:
+            _safe_print(f"  Organization ID : {meta.organization_id}")
+        if meta and meta.developer_id:
+            _safe_print(f"  Developer ID    : {meta.developer_id}")
+        if meta and meta.device_id:
+            _safe_print(f"  Device ID       : {meta.device_id}")
+        if existing_ident and existing_ident.member_name:
+            _safe_print(f"  Developer Name  : {existing_ident.member_name}")
+        _safe_print("")
+
+        explicit_token = getattr(args, "token", None)
+        if explicit_token:
+            re_enroll = True
+        elif auto_yes:
+            re_enroll = False
+            _safe_print("Retaining existing enrollment credentials (-y/--yes specified).")
+        else:
+            if not sys.stdin.isatty():
+                re_enroll = False
+                _safe_print("Non-interactive terminal: Retaining existing enrollment credentials.")
+            else:
+                try:
+                    choice = input("Do you want to re-enroll this device with a new token? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nSetup cancelled by user.")
+                    sys.exit(1)
+                if choice in ("y", "yes"):
+                    re_enroll = True
+                else:
+                    re_enroll = False
+                    _safe_print("Retaining existing enrollment credentials.")
+
+    # 2. Developer Name
+    name_arg = getattr(args, "name", None)
+    if name_arg is not None:
+        if not name_arg.strip():
+            _safe_print("Error: Developer name cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+        developer_name = name_arg.strip()
+    else:
+        if not sys.stdin.isatty() or auto_yes:
+            developer_name = (
+                existing_ident.member_name
+                if existing_ident and existing_ident.member_name
+                else (detect_os_username() or "Developer")
+            )
+        else:
+            while True:
+                try:
+                    raw_name = input("Enter your developer name: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nSetup cancelled by user.")
+                    sys.exit(1)
+                if raw_name:
+                    developer_name = raw_name
+                    break
+                _safe_print("Error: Developer name cannot be empty. Please enter a valid name.")
+
+    if not developer_name:
+        _safe_print("Error: Developer name cannot be empty.", file=sys.stderr)
+        sys.exit(1)
+
+    _safe_print(f"Developer Name: {developer_name}")
+
+    # 3. Server URL and 4. Token (only if re-enrolling or not enrolled)
+    allow_insecure = bool(getattr(args, "allow_insecure_http", False))
+    if re_enroll:
+        server_arg = getattr(args, "server", None)
+        if server_arg is not None:
+            if not server_arg.strip():
+                _safe_print("Error: Server URL cannot be empty.", file=sys.stderr)
+                sys.exit(1)
+            server_url = server_arg.strip()
+        else:
+            default_url = meta.server_url if meta and meta.server_url else None
+            prompt_str = f"Enter central telemetry server URL{' [' + default_url + ']' if default_url else ''}: "
+            if not sys.stdin.isatty():
+                if default_url:
+                    server_url = default_url
+                else:
+                    _safe_print("Error: --server URL is required in non-interactive mode.", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                try:
+                    raw_url = input(prompt_str).strip()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nSetup cancelled by user.")
+                    sys.exit(1)
+                server_url = raw_url if raw_url else (default_url or "")
+
+        if not server_url:
+            _safe_print("Error: Server URL cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+
+        server_url = server_url.rstrip("/")
+        parsed = urllib.parse.urlparse(server_url)
+        if not parsed.scheme or not parsed.netloc:
+            _safe_print(f"Error: Invalid server URL syntax: '{server_url}'. Must include scheme (e.g. https://telemetry.yourorg.com)", file=sys.stderr)
+            sys.exit(1)
+
+        if parsed.scheme.lower() not in ("http", "https"):
+            _safe_print(f"Error: Unsupported URL scheme '{parsed.scheme}'. Must be 'https' (or 'http' for dev testing).", file=sys.stderr)
+            sys.exit(1)
+
+        is_localhost = parsed.hostname in ("127.0.0.1", "localhost", "::1", "host.docker.internal")
+        if parsed.scheme.lower() == "http" and not is_localhost and not allow_insecure:
+            if sys.stdin.isatty() and not auto_yes:
+                try:
+                    confirm = input("Warning: Server URL uses unencrypted HTTP. Allow insecure HTTP for testing? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nSetup cancelled by user.")
+                    sys.exit(1)
+                if confirm in ("y", "yes"):
+                    allow_insecure = True
+                else:
+                    _safe_print("Error: Insecure HTTP rejected. Centralized telemetry requires HTTPS.", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                _safe_print("Error: Insecure HTTP rejected. Use HTTPS or pass --allow-insecure-http.", file=sys.stderr)
+                sys.exit(1)
+
+        _safe_print(f"Server URL: {server_url}")
+
+        # 4. Enrollment Token
+        token_arg = getattr(args, "token", None)
+        if token_arg is not None:
+            if not token_arg.strip():
+                _safe_print("Error: Enrollment token cannot be empty.", file=sys.stderr)
+                sys.exit(1)
+            enrollment_token = token_arg.strip()
+        else:
+            if not sys.stdin.isatty():
+                _safe_print("Error: --token is required in non-interactive mode.", file=sys.stderr)
+                sys.exit(1)
+            try:
+                enrollment_token = getpass.getpass("Enter one-time enrollment token (input hidden): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                _safe_print("\nSetup cancelled by user.")
+                sys.exit(1)
+
+        if not enrollment_token:
+            _safe_print("Error: Enrollment token cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+
+        # 5. Submit enrollment claim
+        _safe_print("\nSubmitting enrollment claim...")
+        client = BackendClient(server_url=server_url, allow_insecure_http=allow_insecure)
+        hostname = detect_hostname()
+        platform_name = f"{platform.system()} {platform.release()}"
+        hardware_uuid = get_or_create_device_id(custom_home=user_home)
+
+        try:
+            claim_resp = client.claim_enrollment(
+                enrollment_token=enrollment_token,
+                hardware_uuid=hardware_uuid,
+                hostname=hostname,
+                platform_name=platform_name,
+                agent_version="0.1.3",
+            )
+        except UploaderClientError as uce:
+            _safe_print(f"\nEnrollment claim failed: {uce}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as ex:
+            _safe_print(f"\nUnexpected error during enrollment claim: {ex}", file=sys.stderr)
+            sys.exit(1)
+
+        credential_token = claim_resp.get("device_credential") or claim_resp.get("credential_token")
+        if not credential_token:
+            _safe_print("\nError: Server response missing device credential token.", file=sys.stderr)
+            sys.exit(1)
+
+        device_info = claim_resp.get("device") if isinstance(claim_resp.get("device"), dict) else {}
+        dev_info = claim_resp.get("developer") if isinstance(claim_resp.get("developer"), dict) else {}
+        org_id = str(claim_resp.get("organization_id") or dev_info.get("organization_id", ""))
+        dev_id = str(claim_resp.get("developer_id") or dev_info.get("developer_id", ""))
+        device_id = str(claim_resp.get("device_id") or device_info.get("device_id", ""))
+        token_prefix = str(claim_resp.get("token_prefix", ""))
+        enrolled_at = str(claim_resp.get("enrolled_at") or claim_resp.get("claimed_at") or datetime.now(timezone.utc).isoformat())
+        expires_at = claim_resp.get("expires_at")
+
+        metadata = EnrollmentMetadata(
+            server_url=server_url,
+            organization_id=org_id,
+            developer_id=dev_id,
+            device_id=device_id,
+            token_prefix=token_prefix,
+            enrolled_at=enrolled_at,
+            expires_at=expires_at,
+            hardware_uuid=hardware_uuid,
+        )
+
+        cred_store.save_credential(token=credential_token, metadata=metadata)
+
+        _safe_print("Verifying device credentials...")
+        try:
+            client.verify_device_identity(credential_token)
+            _safe_print("✓ Device credential verified successfully.")
+        except Exception as ex:
+            _safe_print(f"Warning: Identity verification warning: {ex}", file=sys.stderr)
+
+        resolved_member_id = dev_id or None
+        final_server_url = server_url
+    else:
+        # Retaining existing enrollment
+        hardware_uuid = get_or_create_device_id(custom_home=user_home)
+        hostname = detect_hostname()
+        resolved_member_id = meta.developer_id if meta and meta.developer_id else (existing_ident.member_id if existing_ident else None)
+        final_server_url = meta.server_url if meta and meta.server_url else None
+
+    # 6. Persist Developer Identity locally
+    try:
+        ident = enroll(
+            member_name=developer_name,
+            member_id=resolved_member_id,
+            device_id=hardware_uuid,
+            hostname=hostname,
+            custom_home=user_home,
+        )
+        _safe_print("✓ Developer identity saved locally.")
+    except Exception as e:
+        _safe_print(f"Error: Failed to save developer identity: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # 7. Install Antigravity Lifecycle Hooks
+    _safe_print("Installing global Antigravity lifecycle hooks...")
+    hooks_file = Path(args.config) if getattr(args, "config", None) else None
+    success, msg, backup_path, other_count = install_global_hooks(
+        hooks_file=hooks_file,
+        python_exe=getattr(args, "python", None) or sys.executable,
+    )
+    if not success:
+        _safe_print(f"Error: Failed to install lifecycle hooks: {msg}", file=sys.stderr)
+        sys.exit(1)
+    _safe_print("✓ Antigravity lifecycle hooks installed.")
+
+    # 8. Persist Uploader Configuration
+    config_dict = {
+        "TELEMETRY_UPLOAD_ENABLED": "true",
+        "MEMBER_ID": resolved_member_id or (ident.member_id if 'ident' in locals() else ""),
+        "DEVICE_ID": hardware_uuid,
+    }
+    if final_server_url:
+        config_dict["TELEMETRY_SERVER_URL"] = final_server_url
+    if allow_insecure:
+        config_dict["TELEMETRY_ALLOW_INSECURE_HTTP"] = "true"
+
+    try:
+        saved_cfg_path = save_user_config(config_dict, custom_home=user_home)
+        _safe_print(f"✓ Upload configuration enabled and persisted to {saved_cfg_path.name}.")
+    except Exception as ex:
+        _safe_print(f"Error: Failed to persist upload configuration: {ex}", file=sys.stderr)
+        sys.exit(1)
+
+    # 9. Persistent background service installation (optional)
+    install_service_flag = bool(getattr(args, "install_service", False))
+    should_install_service = False
+
+    if install_service_flag:
+        should_install_service = True
+    elif sys.stdin.isatty() and not auto_yes and platform.system() == "Windows":
+        try:
+            choice = input("\nDo you want to install and start the persistent background uploader service? [y/N]: ").strip().lower()
+            if choice in ("y", "yes"):
+                should_install_service = True
+        except (EOFError, KeyboardInterrupt, StopIteration):
+            pass
+
+
+    service_installed_ok = False
+    if should_install_service:
+        _safe_print("\nConfiguring persistent Windows Task Scheduler background uploader...")
+        mgr = WindowsTaskSchedulerManager(custom_home=user_home)
+        ok, msg = mgr.install(start=True)
+        if ok:
+            service_installed_ok = True
+            _safe_print("✓ Persistent background uploader service installed and started.")
+        else:
+            _safe_print(f"\nWarning: Failed to install background service: {msg}", file=sys.stderr)
+            _safe_print("Setup succeeded partially (credentials, hooks, and configuration were saved).", file=sys.stderr)
+            _safe_print("You can retry installing the background service anytime using:", file=sys.stderr)
+            _safe_print("  telemetry-agent service install --start\n", file=sys.stderr)
+
+    _safe_print("\n" + "=" * 55)
+    _safe_print("✓ Setup Complete!")
+    _safe_print(f"  Developer : {developer_name}")
+    if final_server_url:
+        _safe_print(f"  Server    : {final_server_url}")
+    _safe_print(f"  Device ID : {hardware_uuid}")
+    _safe_print("  Hooks     : Installed in ~/.gemini/config/hooks.json")
+    _safe_print("  Uploads   : Configured and enabled")
+    if service_installed_ok:
+        _safe_print("  Service   : Background scheduled task registered and running")
+    else:
+        _safe_print("  Note      : To register the persistent background service, run:")
+        _safe_print("              telemetry-agent service install --start")
+    _safe_print("=" * 55 + "\n")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="telemetry-agent",
-        description="Local AI and Engineering Telemetry Agent v0.1.2",
+        description="Local AI and Engineering Telemetry Agent v0.1.3",
     )
     parser.add_argument("--env-file", type=str, default=None, help="Path to .env configuration file")
 
     subparsers = parser.add_subparsers(dest="command", help="Agent actions")
+
+    # Setup command (First-run wizard)
+    p_setup = subparsers.add_parser(
+        "setup",
+        help="Interactive first-run wizard to enroll device, install hooks, and configure telemetry",
+    )
+    p_setup.add_argument("--name", "-n", type=str, default=None, help="Developer name for non-interactive setup")
+    p_setup.add_argument("--server", "-s", type=str, default=None, help="Central telemetry server URL (e.g. https://telemetry.internal)")
+    p_setup.add_argument(
+        "--token", "-t", type=str, default=None,
+        help="One-time enrollment token (WARNING: supplying secrets via CLI flags may be logged in shell history; prefer interactive masked prompt)",
+    )
+    p_setup.add_argument("--allow-insecure-http", action="store_true", help="Allow unencrypted HTTP (dev/testing only)")
+    p_setup.add_argument("-y", "--yes", action="store_true", help="Automatic confirmation (accept defaults / retain existing enrollment)")
+    p_setup.add_argument("--install-service", action="store_true", help="Install and start persistent Windows background service after setup")
+    p_setup.add_argument("--config", type=str, default=None, help="Custom hooks.json path")
+    p_setup.add_argument("--python", type=str, default=None, help="Custom python executable path")
+    p_setup.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
 
     # Install command
     p_install = subparsers.add_parser("install", help="Setup, enroll developer, and prepare machine for AI telemetry collection")
@@ -820,6 +1286,35 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_up_status = subparsers.add_parser("upload-status", help="Show upload synchronization and enrollment status")
     p_up_status.add_argument("--json", action="store_true", help="Output raw JSON")
+    p_up_status.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+
+    # Windows background service management commands
+    p_service = subparsers.add_parser(
+        "service",
+        help="Manage persistent Windows Task Scheduler background uploader service",
+    )
+    p_service.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+    svc_subparsers = p_service.add_subparsers(dest="service_action", help="Service management actions")
+
+    p_svc_install = svc_subparsers.add_parser("install", help="Install Windows background scheduled task")
+    p_svc_install.add_argument("--start", action="store_true", help="Start service immediately after installation")
+    p_svc_install.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+
+    p_svc_uninstall = svc_subparsers.add_parser("uninstall", help="Uninstall Windows background scheduled task")
+    p_svc_uninstall.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+
+    p_svc_status = svc_subparsers.add_parser("status", help="Show Windows background service status")
+    p_svc_status.add_argument("--json", action="store_true", help="Output raw JSON")
+    p_svc_status.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+
+    p_svc_start = svc_subparsers.add_parser("start", help="Start background scheduled task")
+    p_svc_start.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+
+    p_svc_stop = svc_subparsers.add_parser("stop", help="Stop background scheduled task")
+    p_svc_stop.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
+
+    p_svc_restart = svc_subparsers.add_parser("restart", help="Restart background scheduled task")
+    p_svc_restart.add_argument("--custom-home", type=str, default=None, help=argparse.SUPPRESS)
 
     return parser
 
@@ -843,7 +1338,9 @@ def cli_entrypoint() -> None:
         parser.print_help()
         sys.exit(1)
 
-    if args.command == "install":
+    if args.command == "setup":
+        cmd_setup(args)
+    elif args.command == "install":
         cmd_install(args)
     elif args.command == "start":
         cmd_start(args)
@@ -871,7 +1368,10 @@ def cli_entrypoint() -> None:
         cmd_upload(args)
     elif args.command == "upload-status":
         cmd_upload_status(args)
+    elif args.command == "service":
+        cmd_service(args)
 
 
 if __name__ == "__main__":
     cli_entrypoint()
+

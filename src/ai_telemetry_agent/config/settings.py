@@ -121,6 +121,7 @@ class Settings:
     upload_max_retries: int = 3
     upload_backoff_factor: float = 1.5
     allow_insecure_http: bool = False
+    upload_trigger_cooldown_seconds: float = 5.0
 
     @property
     def data_dir(self) -> Path:
@@ -138,6 +139,42 @@ class Settings:
         return get_user_agent_home()
 
 
+def save_user_config(key_values: dict, custom_home: Optional[Path] = None) -> Path:
+    """Safely persist or update key-value pairs in ~/.telemetry_agent/config.env.
+
+    Atomically writes to a temporary file before replacing to prevent race conditions.
+    """
+    home = (custom_home or get_user_agent_home()).resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    config_file = home / "config.env"
+
+    existing_vars = parse_dotenv(config_file) if config_file.is_file() else {}
+    for k, v in key_values.items():
+        if v is not None:
+            existing_vars[str(k).strip()] = str(v).strip()
+
+    from datetime import datetime, timezone
+    lines = [
+        "# AI Telemetry Agent Configuration",
+        f"# Automatically updated on {datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}",
+    ]
+    for k, v in sorted(existing_vars.items()):
+        lines.append(f"{k}={v}")
+
+    temp_file = home / f"config.env.{os.getpid()}.tmp"
+    temp_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        temp_file.chmod(0o600)
+    except Exception:
+        pass
+    temp_file.replace(config_file)
+    try:
+        config_file.chmod(0o600)
+    except Exception:
+        pass
+    return config_file
+
+
 def load_settings(
     env_file: Optional[str] = None,
     member_id: Optional[str] = None,
@@ -153,20 +190,15 @@ def load_settings(
     user_home = get_user_agent_home()
 
     # 1. Load from custom or default .env files
-    search_paths = []
     if env_file:
-        search_paths.append(Path(env_file))
+        p = Path(env_file)
+        if p.is_file():
+            env_vars.update(parse_dotenv(p))
     else:
-        search_paths.extend([
-            user_home / "config.env",
-            PROJECT_ROOT / ".env",
-            Path(".env"),
-        ])
-
-    for path in search_paths:
-        if path.is_file():
-            env_vars.update(parse_dotenv(path))
-            break
+        # Load project-level .env files first, then overlay user-level config.env
+        for path in [PROJECT_ROOT / ".env", Path(".env"), user_home / "config.env"]:
+            if path.is_file():
+                env_vars.update(parse_dotenv(path))
 
     # 2. Check persistent identity.json in user_home if no explicit env_file is provided
     member_name = None
@@ -200,6 +232,7 @@ def load_settings(
         "TELEMETRY_UPLOAD_MAX_RETRIES", "UPLOAD_MAX_RETRIES",
         "TELEMETRY_UPLOAD_BACKOFF_FACTOR", "UPLOAD_BACKOFF_FACTOR",
         "TELEMETRY_ALLOW_INSECURE_HTTP", "ALLOW_INSECURE_HTTP",
+        "TELEMETRY_UPLOAD_TRIGGER_COOLDOWN_SECONDS",
     ]:
         val = os.environ.get(key)
         if val is not None:
@@ -309,6 +342,11 @@ def load_settings(
     else:
         allow_insecure = str(allow_insecure_raw).strip().lower() in ("true", "1", "yes", "t")
 
+    try:
+        upload_trigger_cooldown = max(0.0, float(env_vars.get("TELEMETRY_UPLOAD_TRIGGER_COOLDOWN_SECONDS", 5.0)))
+    except ValueError:
+        upload_trigger_cooldown = 5.0
+
     return Settings(
         member_id=final_member_id,
         device_id=final_device_id,
@@ -330,4 +368,5 @@ def load_settings(
         upload_max_retries=upload_max_retries,
         upload_backoff_factor=upload_backoff,
         allow_insecure_http=allow_insecure,
+        upload_trigger_cooldown_seconds=upload_trigger_cooldown,
     )

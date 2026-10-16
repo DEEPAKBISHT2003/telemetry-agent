@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Add project root to sys.path if running standalone
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -17,13 +17,18 @@ for parent in [CURRENT_DIR.parents[2], CURRENT_DIR.parents[3]]:
     if str(parent) not in sys.path:
         sys.path.insert(0, str(parent))
 
-from ai_telemetry_agent.config.settings import load_settings
+from ai_telemetry_agent.config.settings import Settings, load_settings
 from ai_telemetry_agent.core.collector import TelemetryCollector
 from ai_telemetry_agent.core.repository import detect_repository_context
 from ai_telemetry_agent.sources.ai_provider import AIEventBuilder
+from ai_telemetry_agent.uploader.trigger import maybe_trigger_upload
 
 
-def process_hook(hook_type: str) -> None:
+def process_hook(
+    hook_type: str,
+    settings: Optional[Settings] = None,
+    custom_home: Optional[Path] = None,
+) -> None:
     """Read stdin from Antigravity hook, emit telemetry event, and return required stdout."""
     raw_input = ""
     try:
@@ -77,8 +82,8 @@ def process_hook(hook_type: str) -> None:
 
     # Initialize local collector for storage insertion
     try:
-        settings = load_settings()
-        collector = TelemetryCollector(settings)
+        active_settings = settings or load_settings()
+        collector = TelemetryCollector(active_settings)
 
         if hook_type in ("PreInvocation", "pre_invocation"):
             raw_event = AIEventBuilder.build_run_started(
@@ -124,6 +129,10 @@ def process_hook(hook_type: str) -> None:
             event = collector.processor.process_raw(raw_event)
             if event:
                 collector.store.save_event(event)
+
+                # Event safely persisted locally. Trigger detached upload sweep on AI run completion (Stop)
+                if hook_type in ("Stop", "stop"):
+                    maybe_trigger_upload(settings=active_settings, custom_home=custom_home)
 
     except Exception:
         # Never fail or break the developer's agent loop
