@@ -27,7 +27,13 @@ from ai_telemetry_agent.config.settings import (
     get_user_agent_home,
     load_settings,
 )
-from ai_telemetry_agent.core.collector import TelemetryCollector
+from ai_telemetry_agent.core.collector import (
+    TelemetryCollector,
+    extract_telemetry_source_from_cmdline,
+    get_collector_status,
+    get_running_process_cmdline,
+    read_collector_metadata,
+)
 from ai_telemetry_agent.core.identity import (
     DeveloperIdentity,
     detect_hostname,
@@ -42,7 +48,22 @@ from ai_telemetry_agent.integrations.hooks.installer import (
     install_global_hooks,
     uninstall_global_hooks,
 )
+from ai_telemetry_agent.integrations.hooks.kiro_installer import (
+    get_kiro_hook_status,
+    install_kiro_hooks,
+    uninstall_kiro_hooks,
+)
+from ai_telemetry_agent.attribution.aggregator import TicketAggregator
+from ai_telemetry_agent.attribution.detector import detect_branch_ticket, validate_ticket_key
+from ai_telemetry_agent.attribution.jira_adapter import GenericJiraRestAdapter, NullJiraAdapter
+from ai_telemetry_agent.attribution.models import (
+    JiraIssueNotFoundError,
+    JiraUnconfiguredError,
+    JiraUnreachableError,
+)
+from ai_telemetry_agent.attribution.store import AttributionStore
 from ai_telemetry_agent.sources.antigravity import ANTIGRAVITY_AI_TELEMETRY_STATUS
+from ai_telemetry_agent.sources.kiro import KIRO_AI_TELEMETRY_STATUS
 from ai_telemetry_agent.storage.base import EventStore
 from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 
@@ -70,6 +91,38 @@ def _get_active_store(settings: Optional[Settings] = None) -> EventStore:
 
     data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
     return JSONLEventStore(data_dir)
+
+
+def _get_attribution_store(settings: Optional[Settings] = None) -> AttributionStore:
+    """Resolve active persistent attribution store."""
+    if settings is None:
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = None
+
+    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
+    return AttributionStore(data_dir)
+
+
+def _get_jira_adapter(settings: Optional[Settings] = None):
+    """Instantiate configured Jira API client adapter or NullJiraAdapter."""
+    if settings and settings.jira_base_url:
+        return GenericJiraRestAdapter(
+            base_url=settings.jira_base_url,
+            auth_type=settings.jira_auth_type,
+            api_token=settings.jira_api_token,
+            username=settings.jira_username,
+        )
+    base_url = os.environ.get("JIRA_BASE_URL")
+    if base_url:
+        return GenericJiraRestAdapter(
+            base_url=base_url,
+            auth_type=os.environ.get("JIRA_AUTH_TYPE", "pat"),
+            api_token=os.environ.get("JIRA_API_TOKEN") or os.environ.get("JIRA_PAT"),
+            username=os.environ.get("JIRA_USERNAME"),
+        )
+    return NullJiraAdapter()
 
 
 def cmd_install(args: argparse.Namespace) -> None:
@@ -174,11 +227,16 @@ def cmd_install(args: argparse.Namespace) -> None:
 
 def cmd_start(args: argparse.Namespace) -> None:
     """Start the telemetry collector."""
+    overrides = {}
+    if getattr(args, "source", None):
+        overrides["TELEMETRY_SOURCE"] = args.source
+
     try:
         settings = load_settings(
             env_file=args.env_file,
             member_id=args.member,
             device_id=args.device,
+            overrides=overrides if overrides else None,
         )
     except ConfigurationError as ce:
         print(f"Error: {ce}", file=sys.stderr)
@@ -190,7 +248,9 @@ def cmd_start(args: argparse.Namespace) -> None:
     print(f"Member ID  : {settings.member_id}")
     print(f"Device ID  : {settings.device_id}")
     print(f"Storage    : {settings.data_dir}")
+    print(f"Source Mode: {settings.telemetry_source}")
     print(f"Antigravity: {ANTIGRAVITY_AI_TELEMETRY_STATUS}")
+    print(f"Kiro AI    : {KIRO_AI_TELEMETRY_STATUS}")
     print(f"Status     : RUNNING")
     print("=" * 50 + "\n")
     print("Press Ctrl+C to stop the collector.\n")
@@ -207,21 +267,28 @@ def cmd_status(args: argparse.Namespace) -> None:
         settings = None
 
     data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
-    pid_file = data_dir / "collector.pid"
-
-    is_running = False
-    pid = None
-    if pid_file.exists():
-        try:
-            pid = int(pid_file.read_text(encoding="utf-8").strip())
-            is_running = True
-        except Exception:
-            pass
+    is_running, pid = get_collector_status(data_dir, cleanup_stale=True)
 
     print("\n" + "=" * 50)
     print("Telemetry Collector Status")
     print("=" * 50)
     print(f"Process Status     : {'RUNNING (PID ' + str(pid) + ')' if is_running else 'STOPPED'}")
+
+    # Determine effective telemetry source:
+    # 1. If collector is running, check metadata file written by running instance.
+    # 2. Check running process command line flags (--source).
+    # 3. Fall back to settings.telemetry_source (configuration file or default).
+    effective_source = getattr(settings, "telemetry_source", "antigravity") if settings else "antigravity"
+    if is_running and pid:
+        meta = read_collector_metadata(data_dir)
+        if meta.get("telemetry_source"):
+            effective_source = meta["telemetry_source"]
+        else:
+            proc_cmd = get_running_process_cmdline(pid)
+            extracted = extract_telemetry_source_from_cmdline(proc_cmd)
+            if extracted:
+                effective_source = extracted
+
     if settings:
         if settings.member_name:
             print(f"Developer Name     : {settings.member_name}")
@@ -230,9 +297,21 @@ def cmd_status(args: argparse.Namespace) -> None:
         if settings.hostname:
             print(f"Hostname           : {settings.hostname}")
         print(f"Collector Version  : {settings.collector_version}")
+        print(f"Telemetry Source   : {effective_source}")
     print(f"Storage Directory  : {data_dir}")
     print(f"Storage Format     : Date-based JSONL (telemetry-YYYY-MM-DD.jsonl)")
     print(f"Antigravity Status : {ANTIGRAVITY_AI_TELEMETRY_STATUS}")
+    print(f"Kiro AI Status     : {KIRO_AI_TELEMETRY_STATUS}")
+
+    attr_store = _get_attribution_store(settings)
+    active_attr = attr_store.get_active_attribution()
+    proposed = attr_store.get_proposed_switch()
+    if active_attr:
+        print(f"Active Jira Ticket : {active_attr.issue_key} ({active_attr.confirmation_state}, source={active_attr.source})")
+    else:
+        print(f"Active Jira Ticket : UNASSIGNED")
+    if proposed:
+        print(f"Proposed Switch    : {proposed} (pending confirmation via 'jira confirm')")
 
     store = _get_active_store(settings)
     total_events = store.get_count()
@@ -284,6 +363,15 @@ def cmd_events(args: argparse.Namespace) -> None:
             details = f"repo={ev.payload.get('repository', '')} branch={ev.payload.get('branch', '')}"
             if "commit_sha" in ev.payload:
                 details += f" sha={ev.payload.get('commit_sha')[:7]}"
+        elif etype == "kiro_detected" or (ev.payload and ev.payload.get("capture_method", "").startswith("kiro_")):
+            source = "kiro"
+            details = f"provider={ev.payload.get('provider')} model={ev.payload.get('model')}"
+            if ev.payload.get("tool_name"):
+                details = f"tool={ev.payload.get('tool_name')} " + details
+            if ev.payload.get("credits") is not None:
+                details += f" credits={ev.payload.get('credits')}"
+            if ev.context.repository and ev.context.repository.name:
+                details += f" repo={ev.context.repository.name}"
         elif etype.startswith("ai_") or etype in {"tool_call", "agent_started", "agent_completed"}:
             source = "antigravity"
             details = f"provider={ev.payload.get('provider')} model={ev.payload.get('model')}"
@@ -309,6 +397,7 @@ def cmd_session(args: argparse.Namespace) -> None:
         settings = None
 
     store = _get_active_store(settings)
+    attr_store = _get_attribution_store(settings)
     sessions = store.get_sessions(session_id=args.id, limit=1)
 
     if not sessions:
@@ -316,6 +405,11 @@ def cmd_session(args: argparse.Namespace) -> None:
         return
 
     s = sessions[0]
+    rname = s.get("repository_name")
+    started = s.get("started_at")
+    attr = attr_store.find_attribution_for_event(repo_name=rname, timestamp=started)
+    ticket_key = attr.issue_key if attr else "UNASSIGNED"
+    s["attributed_ticket"] = ticket_key
 
     if args.json:
         print(json.dumps(s, indent=2, ensure_ascii=False))
@@ -326,6 +420,7 @@ def cmd_session(args: argparse.Namespace) -> None:
     print("=" * 50)
     print(f"Repository : {s['repository_name'] or 'unknown'}")
     print(f"Branch     : {s['branch'] or 'unknown'}")
+    print(f"Jira Ticket: {ticket_key}")
     print(f"Member ID  : {s['member_id']}")
     print(f"Device ID  : {s['device_id']}")
     print(f"Started At : {s['started_at']}")
@@ -353,6 +448,11 @@ def cmd_session(args: argparse.Namespace) -> None:
     else:
         print("  none")
 
+    if s.get("has_credit_data"):
+        print("\nCredit Usage (Kiro Metering):")
+        unit = s.get("credit_unit") or "credit"
+        print(f"  Total Credits         : {s.get('total_credits', 0.0):.4f} {unit}s")
+
     if s.get("has_token_data"):
         print("\nToken Usage (Authoritative):")
         print(f"  Uncached Input Tokens : {s.get('input_tokens', 0):,}")
@@ -364,14 +464,29 @@ def cmd_session(args: argparse.Namespace) -> None:
 
 
 def cmd_sessions(args: argparse.Namespace) -> None:
-    """List distinct Antigravity sessions and their repository correlation."""
+    """List distinct AI sessions and their repository correlation."""
     try:
         settings = load_settings(env_file=args.env_file)
     except Exception:
         settings = None
 
     store = _get_active_store(settings)
+    attr_store = _get_attribution_store(settings)
     sessions = store.get_sessions(repository_name=args.repo, member_id=args.member, limit=args.limit)
+
+    # Attach attributed ticket to each session and apply ticket filter if specified
+    ticket_filter = getattr(args, "ticket", None)
+    filtered = []
+    for s in sessions:
+        rname = s.get("repository_name")
+        started = s.get("started_at")
+        attr = attr_store.find_attribution_for_event(repo_name=rname, timestamp=started)
+        ticket_key = attr.issue_key if attr else "UNASSIGNED"
+        s["attributed_ticket"] = ticket_key
+        if ticket_filter and ticket_key.upper() != ticket_filter.upper():
+            continue
+        filtered.append(s)
+    sessions = filtered
 
     if not sessions:
         print("No session records found.")
@@ -381,24 +496,30 @@ def cmd_sessions(args: argparse.Namespace) -> None:
         print(json.dumps(sessions, indent=2, ensure_ascii=False))
         return
 
-    print("\n" + f"{'SESSION ID':<38} | {'REPOSITORY':<16} | {'BRANCH':<12} | {'MODELS':<40} | {'AI RUNS':<7} | {'TOOLS':<6} | {'DURATION'}")
-    print("-" * 135)
+    print("\n" + f"{'SESSION ID':<38} | {'TICKET':<10} | {'REPOSITORY':<16} | {'BRANCH':<12} | {'MODELS':<30} | {'RUNS':<5} | {'CREDITS':<10} | {'DURATION'}")
+    print("-" * 150)
 
     for s in sessions:
         sid = s["session_id"]
+        tkt = s.get("attributed_ticket") or "-"
         repo = s["repository_name"] or "unknown"
         branch = s["branch"] or "unknown"
         models_str = ", ".join(s.get("models", [])) if s.get("models") else (s.get("model") or "unknown")
         ai_runs = s["ai_runs_count"]
-        tools = s["tool_calls_count"]
+        credits_str = f"{s.get('total_credits', 0.0):.2f}" if s.get("has_credit_data") else "-"
         duration = f"{s['duration_seconds']}s"
 
-        print(f"{sid:<38} | {repo:<16} | {branch:<12} | {models_str:<40} | {ai_runs:<7} | {tools:<6} | {duration}")
-    print("-" * 135 + "\n")
+        print(f"{sid:<38} | {tkt:<10} | {repo:<16} | {branch:<12} | {models_str:<30} | {ai_runs:<5} | {credits_str:<10} | {duration}")
+    print("-" * 150 + "\n")
 
 
 def cmd_summary(args: argparse.Namespace) -> None:
-    """Show aggregated session, AI run, and tool usage summary grouped by repository."""
+    """Show aggregated session, AI run, tool usage, and credit summary grouped by repository or Jira ticket."""
+    if getattr(args, "by_ticket", False) or getattr(args, "ticket", None):
+        args.jira_command = "summary"
+        cmd_jira(args)
+        return
+
     try:
         settings = load_settings(env_file=args.env_file)
     except Exception:
@@ -424,6 +545,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
         print(f"Total Sessions: {data['total_sessions']}")
         print(f"Total AI Runs : {data['total_ai_runs']}")
         print(f"Tool Calls    : {data['total_tool_calls']}")
+        if data.get("has_credit_data"):
+            print(f"Total Credits : {data['total_credits']:.4f}")
         print(f"Branches      : {', '.join(data['branches']) if data['branches'] else 'none'}")
         
         # Format models with run counts if available
@@ -439,16 +562,396 @@ def cmd_summary(args: argparse.Namespace) -> None:
         print(f"Tools Used    : {', '.join(data['tools_used']) if data['tools_used'] else 'none'}")
         print(f"Last Activity : {data['last_active']}")
         print("-" * 40)
-    print("=" * 60 + "\n")
+def cmd_jira(args: argparse.Namespace) -> None:
+    """Handle Jira ticket attribution, synchronization, and reporting commands."""
+    try:
+        settings = load_settings(env_file=getattr(args, "env_file", None))
+    except Exception:
+        settings = None
+
+    attr_store = _get_attribution_store(settings)
+    action = getattr(args, "jira_command", None)
+
+    if not action:
+        _safe_print("Error: Jira action required. Run 'telemetry-agent jira --help' for available commands.")
+        sys.exit(1)
+
+    repo_arg = getattr(args, "repo", None)
+
+    if action == "select":
+        jira_adapter = _get_jira_adapter(settings)
+        allow_unverified = getattr(args, "allow_unverified", False)
+
+        try:
+            attr = attr_store.select_ticket(
+                args.ticket,
+                repo_path=repo_arg,
+                source="manual",
+                jira_adapter=jira_adapter,
+                allow_unverified=allow_unverified,
+            )
+            val_status = getattr(attr, "validation_status", "unverified")
+            if val_status == "verified":
+                _safe_print(f"\n✓ Jira ticket '{attr.issue_key}' verified and selected for repository '{attr.repository_name}'.")
+            elif allow_unverified:
+                if jira_adapter.is_configured():
+                    _safe_print(f"\n! Warning: Jira ticket '{attr.issue_key}' could not be verified against Jira.")
+                else:
+                    _safe_print(f"\n! Warning: Jira integration is unconfigured. Ticket '{attr.issue_key}' cannot be verified and may not exist.")
+                _safe_print(f"  Proceeding under explicit offline policy (--allow-unverified).")
+                _safe_print(f"\n✓ Jira ticket '{attr.issue_key}' selected for repository '{attr.repository_name}'.")
+            else:
+                _safe_print(f"\n✓ Jira ticket '{attr.issue_key}' selected for repository '{attr.repository_name}'.")
+
+            _safe_print(f"  Repository Root: {attr.repository_root}")
+            _safe_print(f"  Branch         : {attr.branch or 'unknown'}")
+            _safe_print(f"  Validation     : {val_status}{' (' + attr.validation_message + ')' if getattr(attr, 'validation_message', None) else ''}")
+            if getattr(attr, "issue_title", None):
+                _safe_print(f"  Issue Title    : {attr.issue_title}")
+            if getattr(attr, "issue_status", None):
+                _safe_print(f"  Issue Status   : {attr.issue_status}")
+            _safe_print(f"  Confirmation   : {attr.confirmation_state} (user selected)")
+            _safe_print(f"  Source         : {attr.source}")
+            _safe_print(f"  Active Since   : {attr.start_time}\n")
+
+        except JiraIssueNotFoundError as infe:
+            active_attr = attr_store.get_active_attribution(repo_arg)
+            active_display = active_attr.issue_key if active_attr else "UNASSIGNED"
+            _safe_print(f"\n[ERROR] Jira ticket selection rejected: Issue '{infe.key}' was not found on Jira (HTTP 404 Not Found).", file=sys.stderr)
+            _safe_print(f"  Reason: The issue does not exist or your account lacks permission to view it.", file=sys.stderr)
+            _safe_print(f"  Active ticket remains unchanged: {active_display}\n", file=sys.stderr)
+            sys.exit(1)
+
+        except JiraUnconfiguredError as juc:
+            active_attr = attr_store.get_active_attribution(repo_arg)
+            active_display = active_attr.issue_key if active_attr else "UNASSIGNED"
+            _safe_print(f"\n[ERROR] Jira ticket selection rejected: Jira integration is unconfigured.", file=sys.stderr)
+            _safe_print(f"  JIRA_BASE_URL is not set. Cannot verify whether issue '{juc.key}' exists.", file=sys.stderr)
+            _safe_print(f"\n  Offline Policy:", file=sys.stderr)
+            _safe_print(f"  To attribute telemetry to an unverified ticket while working offline, pass:", file=sys.stderr)
+            _safe_print(f"    --allow-unverified (or --offline)", file=sys.stderr)
+            _safe_print(f"  Example: telemetry-agent jira select {juc.key} --allow-unverified\n", file=sys.stderr)
+            _safe_print(f"  Active ticket remains unchanged: {active_display}\n", file=sys.stderr)
+            sys.exit(1)
+
+        except JiraUnreachableError as jue:
+            active_attr = attr_store.get_active_attribution(repo_arg)
+            active_display = active_attr.issue_key if active_attr else "UNASSIGNED"
+            _safe_print(f"\n[ERROR] Jira validation failed ({jue.status}): {jue.reason}", file=sys.stderr)
+            _safe_print(f"  Cannot verify whether issue '{jue.key}' exists on the configured Jira instance.", file=sys.stderr)
+            _safe_print(f"\n  Offline Policy:", file=sys.stderr)
+            _safe_print(f"  To attribute telemetry to an unverified ticket while offline or disconnected, pass:", file=sys.stderr)
+            _safe_print(f"    --allow-unverified (or --offline)", file=sys.stderr)
+            _safe_print(f"  Example: telemetry-agent jira select {jue.key} --allow-unverified\n", file=sys.stderr)
+            _safe_print(f"  Active ticket remains unchanged: {active_display}\n", file=sys.stderr)
+            sys.exit(1)
+
+        except ValueError as ve:
+            _safe_print(f"\nError: {ve}\n", file=sys.stderr)
+            sys.exit(1)
+
+    elif action == "status":
+        active, proposed = attr_store.sync_branch(repo_arg)
+        detection = detect_branch_ticket(repo_arg)
+        repo_key, repo_name, current_branch = attr_store._resolve_repo(repo_arg)
+
+        if getattr(args, "json", False):
+            payload = {
+                "repository": repo_name,
+                "repository_root": repo_key,
+                "current_branch": current_branch,
+                "active_ticket": active.to_dict() if active else None,
+                "proposed_switch": proposed,
+                "branch_detection": {
+                    "keys": detection.keys,
+                    "status": detection.status,
+                    "suggested_key": detection.suggested_key,
+                },
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return
+
+        print("\n" + "=" * 50)
+        print("Active Jira Ticket Association")
+        print("=" * 50)
+        print(f"Repository     : {repo_name}")
+        print(f"Current Branch : {current_branch or 'unknown'}")
+        if active:
+            val_status = getattr(active, "validation_status", "unverified")
+            print(f"Active Ticket  : {active.issue_key} ({active.confirmation_state}, {val_status})")
+            if getattr(active, "issue_title", None):
+                print(f"Issue Title    : {active.issue_title}")
+            if getattr(active, "issue_status", None):
+                print(f"Issue Status   : {active.issue_status}")
+            print(f"Source         : {active.source}")
+            print(f"Active Since   : {active.start_time}")
+        else:
+            print(f"Active Ticket  : UNASSIGNED")
+
+        if proposed:
+            print(f"Proposed Switch: {proposed} (detected on branch '{current_branch}')")
+            print("Action Required: Run 'telemetry-agent jira confirm' to switch active ticket.")
+        elif not active:
+            print("Action         : Run 'telemetry-agent jira select <ISSUE-KEY>' to assign work.")
+        print("=" * 50 + "\n")
+
+    elif action == "clear":
+        attr_store.clear_ticket(repo_arg)
+        _safe_print("\n✓ Cleared active Jira ticket association. Work is now marked as UNASSIGNED.\n")
+
+    elif action == "preview":
+        detection = detect_branch_ticket(repo_arg)
+        active = attr_store.get_active_attribution(repo_arg)
+        repo_key, repo_name, current_branch = attr_store._resolve_repo(repo_arg)
+
+        if getattr(args, "json", False):
+            payload = {
+                "repository": repo_name,
+                "branch": current_branch,
+                "detected_keys": detection.keys,
+                "status": detection.status,
+                "suggested_key": detection.suggested_key,
+                "active_ticket": active.issue_key if active else None,
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return
+
+        print("\n" + "=" * 50)
+        print("Branch Issue Key Preview")
+        print("=" * 50)
+        print(f"Repository     : {repo_name}")
+        print(f"Current Branch : {current_branch or 'unknown'}")
+        print(f"Detected Keys  : {', '.join(detection.keys) if detection.keys else 'none'}")
+        print(f"Status         : {detection.status}")
+        if detection.status == "single":
+            print(f"Suggested Key  : {detection.suggested_key}")
+            if active and active.issue_key == detection.suggested_key:
+                print(f"Alignment      : Agrees with active ticket '{active.issue_key}'")
+            elif active:
+                print(f"Alignment      : Differs from active ticket '{active.issue_key}' (requires confirmation to switch)")
+        elif detection.status == "conflict":
+            print("Alignment      : Multiple conflicting issue keys detected in branch name; manual selection required.")
+        else:
+            print("Alignment      : No issue key found in branch name.")
+        print("=" * 50 + "\n")
+
+    elif action == "confirm":
+        jira_adapter = _get_jira_adapter(settings)
+        allow_unverified = getattr(args, "allow_unverified", False)
+        try:
+            confirmed = attr_store.confirm_switch(
+                repo_arg,
+                jira_adapter=jira_adapter,
+                allow_unverified=allow_unverified,
+            )
+            if confirmed:
+                val_status = getattr(confirmed, "validation_status", "unverified")
+                val_str = f" ({val_status})" if val_status != "unverified" else ""
+                _safe_print(f"\n✓ Confirmed switch to Jira ticket '{confirmed.issue_key}'{val_str} for repository '{confirmed.repository_name}'.")
+                _safe_print(f"  Branch         : {confirmed.branch or 'unknown'}")
+                _safe_print(f"  Validation     : {val_status}")
+                if getattr(confirmed, "issue_title", None):
+                    _safe_print(f"  Issue Title    : {confirmed.issue_title}")
+                _safe_print(f"  Confirmation   : {confirmed.confirmation_state}")
+                _safe_print(f"  Active Since   : {confirmed.start_time}\n")
+            else:
+                _safe_print("\nNo proposed ticket switch is currently pending confirmation.\n")
+        except JiraIssueNotFoundError as infe:
+            active_attr = attr_store.get_active_attribution(repo_arg)
+            active_display = active_attr.issue_key if active_attr else "UNASSIGNED"
+            _safe_print(f"\n[ERROR] Proposed Jira ticket confirmation rejected: Issue '{infe.key}' was not found on Jira (HTTP 404 Not Found).", file=sys.stderr)
+            _safe_print(f"  Reason: The issue does not exist or your account lacks permission to view it.", file=sys.stderr)
+            _safe_print(f"  Active ticket remains unchanged: {active_display}\n", file=sys.stderr)
+            sys.exit(1)
+        except JiraUnconfiguredError as juc:
+            active_attr = attr_store.get_active_attribution(repo_arg)
+            active_display = active_attr.issue_key if active_attr else "UNASSIGNED"
+            _safe_print(f"\n[ERROR] Proposed Jira ticket confirmation rejected: Jira integration is unconfigured.", file=sys.stderr)
+            _safe_print(f"  JIRA_BASE_URL is not set. Cannot verify whether proposed issue '{juc.key}' exists.", file=sys.stderr)
+            _safe_print(f"\n  Offline Policy:", file=sys.stderr)
+            _safe_print(f"  To confirm an unverified ticket while working offline, pass:", file=sys.stderr)
+            _safe_print(f"    --allow-unverified (or --offline)", file=sys.stderr)
+            _safe_print(f"  Example: telemetry-agent jira confirm --allow-unverified\n", file=sys.stderr)
+            _safe_print(f"  Active ticket remains unchanged: {active_display}\n", file=sys.stderr)
+            sys.exit(1)
+        except JiraUnreachableError as jue:
+            active_attr = attr_store.get_active_attribution(repo_arg)
+            active_display = active_attr.issue_key if active_attr else "UNASSIGNED"
+            _safe_print(f"\n[ERROR] Jira validation failed ({jue.status}): {jue.reason}", file=sys.stderr)
+            _safe_print(f"  Cannot verify whether proposed issue '{jue.key}' exists.", file=sys.stderr)
+            _safe_print(f"  Pass --allow-unverified to confirm under offline policy.\n", file=sys.stderr)
+            _safe_print(f"  Active ticket remains unchanged: {active_display}\n", file=sys.stderr)
+            sys.exit(1)
+
+    elif action == "recent":
+        limit = getattr(args, "limit", 10)
+        recent = attr_store.get_recent_tickets(repo_path=repo_arg, limit=limit)
+        if getattr(args, "json", False):
+            print(json.dumps(recent, indent=2, ensure_ascii=False))
+            return
+
+        if not recent:
+            print("\nNo recent Jira ticket associations found.\n")
+            return
+
+        print("\n" + f"{'TICKET':<12} | {'REPOSITORY':<20} | {'BRANCH':<24} | {'SOURCE':<10} | {'ACTIVE':<8} | {'LAST ACTIVE'}")
+        print("-" * 95)
+        for r in recent:
+            act_str = "YES" if r.get("is_active") else "NO"
+            print(f"{r['issue_key']:<12} | {str(r.get('repository') or 'unknown'):<20} | {str(r.get('branch') or '-'):<24} | {r.get('source', '-'):<10} | {act_str:<8} | {r.get('last_active', '-')}")
+        print("-" * 95 + "\n")
+
+    elif action == "summary":
+        event_store = _get_active_store(settings)
+        jira_adapter = _get_jira_adapter(settings)
+        aggregator = TicketAggregator(event_store, attr_store, jira_adapter)
+        summaries = aggregator.get_ticket_summaries(
+            repository_name=repo_arg,
+            ticket_key=getattr(args, "ticket", None),
+            date_from=getattr(args, "date_from", None),
+            date_to=getattr(args, "date_to", None),
+        )
+
+        if getattr(args, "json", False):
+            print(json.dumps({k: v.to_dict() for k, v in summaries.items()}, indent=2, ensure_ascii=False))
+            return
+
+        if not summaries:
+            print("No telemetry records found for ticket summary.")
+            return
+
+        print("\n" + "=" * 70)
+        print("JIRA TICKET TELEMETRY SUMMARY")
+        print("=" * 70)
+
+        total_sessions = 0
+        total_runs = 0
+        total_credits = 0.0
+        attributed_sessions = 0
+        attributed_credits = 0.0
+
+        all_session_ids: set = set()
+        any_credit_data = False
+
+        for key, s in sorted(summaries.items(), key=lambda x: (x[0] == "UNASSIGNED", x[0])):
+            total_sessions += s.sessions_count
+            total_runs += s.ai_runs_count
+            total_credits = round(total_credits + s.total_credits, 4)
+            all_session_ids.update(s.session_ids)
+            if s.has_credit_data:
+                any_credit_data = True
+            if key != "UNASSIGNED":
+                attributed_sessions += s.sessions_count
+                attributed_credits = round(attributed_credits + s.total_credits, 4)
+
+            print(f"\nTicket        : {s.issue_key}")
+            if s.title:
+                print(f"Title         : {s.title}")
+            if s.status:
+                print(f"Status        : {s.status}")
+            print(f"Repositories  : {', '.join(s.repositories) if s.repositories else 'none'}")
+            print(f"Branches      : {', '.join(s.branches) if s.branches else 'none'}")
+            print(f"Sessions      : {s.sessions_count}")
+            print(f"AI Runs       : {s.ai_runs_count}")
+            if s.has_credit_data:
+                print(f"Total Credits : {s.total_credits:.4f} {s.credit_unit or 'credit'}s")
+            else:
+                print(f"Total Credits : unavailable")
+            if s.has_token_data:
+                in_tok = f"{s.input_tokens:,}" if s.input_tokens is not None else "-"
+                out_tok = f"{s.output_tokens:,}" if s.output_tokens is not None else "-"
+                c_tok = f"{s.cache_read_tokens:,}" if s.cache_read_tokens is not None else "-"
+                tot_tok = f"{s.total_tokens:,}" if s.total_tokens is not None else "-"
+                print(f"Tokens        : Input: {in_tok} | Output: {out_tok} | Cache: {c_tok} | Total: {tot_tok}")
+            print(f"Duration      : {s.duration_seconds}s (tracked session duration, not active coding time)")
+            print(f"Source        : {s.source} ({s.confirmation_state})")
+            if s.session_ids:
+                print(f"Session IDs   : {', '.join(s.session_ids[:5])}{' (and ' + str(len(s.session_ids)-5) + ' more)' if len(s.session_ids) > 5 else ''}")
+            print("-" * 50)
+
+        unassigned_s = summaries.get("UNASSIGNED")
+        unassigned_count = unassigned_s.sessions_count if unassigned_s else 0
+        unassigned_cred = unassigned_s.total_credits if unassigned_s else 0.0
+
+        print("\nReconciliation:")
+        print(f"  Total Unique Sessions: {len(all_session_ids)} (Attributed Engagements: {attributed_sessions} | Unassigned: {unassigned_count})")
+        if any_credit_data:
+            print(f"  Attributed Credits   : {attributed_credits:.4f} | Unassigned: {unassigned_cred:.4f} | Total: {total_credits:.4f}")
+        else:
+            print(f"  Credits Status       : unavailable (no measured credit telemetry in selected scope)")
+        print("=" * 70 + "\n")
+
+    elif action == "sessions":
+        args.limit = getattr(args, "limit", 50)
+        cmd_sessions(args)
+
+    elif action == "test-connection":
+        jira_adapter = _get_jira_adapter(settings)
+        if isinstance(jira_adapter, NullJiraAdapter) or not jira_adapter.is_configured():
+            _safe_print("\n[ERROR] Jira connection test failed: Jira API is unconfigured.", file=sys.stderr)
+            _safe_print("  Reason: JIRA_BASE_URL is not set in environment or .env file.\n", file=sys.stderr)
+            sys.exit(1)
+
+        result = jira_adapter.test_connection()
+        issue_key_arg = getattr(args, "issue", None) or getattr(args, "ticket", None)
+        issue_result = None
+        if issue_key_arg and result.get("status") == "success":
+            issue_result = getattr(jira_adapter, "test_issue", lambda k: None)(issue_key_arg)
+
+        if getattr(args, "json", False):
+            payload = {
+                "connection": result,
+                "issue_lookup": issue_result,
+            }
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            if result.get("status") != "success" or (issue_result and issue_result.get("status") != "success"):
+                sys.exit(1)
+            return
+
+        print("\n" + "=" * 55)
+        print("          JIRA API CONNECTION TEST")
+        print("=" * 55)
+        print(f"Base URL       : {result.get('base_url', settings.jira_base_url if settings else 'unknown')}")
+        print(f"Auth Type      : {result.get('auth_type', 'unknown')}")
+        print(f"Status         : {result.get('status', 'unknown').upper()}")
+        print(f"Message        : {result.get('message', '')}")
+
+        if result.get("status") == "success":
+            if result.get("display_name"):
+                print(f"Account Name   : {result.get('display_name')}")
+            if result.get("email"):
+                print(f"Account Email  : {result.get('email')}")
+            if result.get("account_type"):
+                print(f"Account Type   : {result.get('account_type')}")
+            if result.get("time_zone"):
+                print(f"Time Zone      : {result.get('time_zone')}")
+            act_str = "YES" if result.get("active") else "NO"
+            print(f"Account Active : {act_str}")
+
+            if issue_result:
+                print("-" * 55)
+                print(f"Issue Lookup   : {issue_result.get('key')}")
+                print(f"Lookup Status  : {issue_result.get('status', 'unknown').upper()}")
+                print(f"Lookup Message : {issue_result.get('message', '')}")
+                if issue_result.get("title"):
+                    print(f"Issue Title    : {issue_result.get('title')}")
+                if issue_result.get("issue_status"):
+                    print(f"Issue State    : {issue_result.get('issue_status')}")
+                if issue_result.get("url"):
+                    print(f"Issue URL      : {issue_result.get('url')}")
+            print("=" * 55 + "\n")
+        else:
+            print("=" * 55 + "\n", file=sys.stderr)
+            sys.exit(1)
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
-    """Stop a running collector instance via pid file."""
+    """Stop a running collector instance via pid file with stale PID protection."""
     try:
         settings = load_settings(env_file=args.env_file)
         data_dir = settings.data_dir
     except Exception:
-        data_dir = Path.home() / ".telemetry_agent" / "data"
+        data_dir = (get_user_agent_home() / "data").resolve()
 
     pid_file = data_dir / "collector.pid"
     if not pid_file.exists():
@@ -459,13 +962,25 @@ def cmd_stop(args: argparse.Namespace) -> None:
         print("No running collector detected.")
         return
 
+    is_running, pid = get_collector_status(data_dir, cleanup_stale=False)
+    if not is_running:
+        try:
+            stale_pid = int(pid_file.read_text(encoding="utf-8").strip())
+            pid_file.unlink(missing_ok=True)
+            print(f"Removed stale collector PID file (PID {stale_pid} is not running). No processes were terminated.")
+        except Exception:
+            pid_file.unlink(missing_ok=True)
+            print("Removed invalid collector PID file.")
+        return
+
     try:
-        pid = int(pid_file.read_text(encoding="utf-8").strip())
         if sys.platform == "win32":
             os.system(f"taskkill /PID {pid} /F >nul 2>&1")
         else:
             os.kill(pid, 15)
         pid_file.unlink(missing_ok=True)
+        meta_file = pid_file.parent / "collector_meta.json"
+        meta_file.unlink(missing_ok=True)
         print(f"Stopped collector process (PID {pid}).")
     except Exception as ex:
         print(f"Failed to stop collector: {ex}")
@@ -483,8 +998,7 @@ def cmd_hook_status(args: argparse.Namespace) -> None:
     except Exception:
         data_dir = (get_user_agent_home() / "data").resolve()
 
-    pid_file = data_dir / "collector.pid"
-    collector_running = pid_file.is_file()
+    collector_running, _ = get_collector_status(data_dir, cleanup_stale=True)
 
     print("\n" + "=" * 50)
     print("Global Antigravity Hook Status")
@@ -559,6 +1073,76 @@ def cmd_uninstall_hook(args: argparse.Namespace) -> None:
     print("=" * 50 + "\n")
 
 
+def cmd_kiro_hook_status(args: argparse.Namespace) -> None:
+    """Display Kiro IDE hook configuration and verification status."""
+    target_file = Path(args.config) if getattr(args, "config", None) else None
+    status = get_kiro_hook_status(hooks_file=target_file)
+
+    print("\n" + "=" * 50)
+    print("Kiro IDE Telemetry Hook Status")
+    print("=" * 50)
+    print(f"Config Path             : {status['config_path']}")
+    print(f"Config exists           : {'YES' if status['config_exists'] else 'NO'}")
+    print(f"JSON valid              : {'YES' if status['json_valid'] else 'NO'}")
+    print(f"Telemetry hook installed: {'YES' if status['telemetry_hook_installed'] else 'NO'}")
+    print(f"Telemetry handler       : {'VALID' if status['handler_valid'] else 'INVALID'}")
+    print(f"Handler Path            : {status['handler_path']}")
+    print(f"Python Executable       : {status['python_executable']}")
+    print(f"Other hooks detected    : {status['other_hooks_count']}")
+    print("=" * 50 + "\n")
+
+
+def cmd_install_kiro_hook(args: argparse.Namespace) -> None:
+    """Install or update Kiro IDE lifecycle hooks."""
+    target_file = Path(args.config) if getattr(args, "config", None) else None
+    user_name = os.environ.get("USERNAME") or os.environ.get("USER") or Path.home().name
+
+    print("\n" + "=" * 50)
+    print("AI Telemetry Agent — Kiro Hook Installer")
+    print("=" * 50)
+    print(f"User        : {user_name}")
+    print(f"Agent       : ai-telemetry-agent")
+
+    success, msg, backup_path, other_count = install_kiro_hooks(
+        hooks_file=target_file,
+        python_exe=args.python if getattr(args, "python", None) else None,
+    )
+
+    if not success:
+        print(f"\nERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    if backup_path:
+        print(f"Backup created:\n{backup_path}\n")
+
+    print(f"{msg}")
+    print("Telemetry will now capture Kiro IDE activity.")
+    print("=" * 50 + "\n")
+
+
+def cmd_uninstall_kiro_hook(args: argparse.Namespace) -> None:
+    """Uninstall telemetry hooks from Kiro IDE configuration."""
+    target_file = Path(args.config) if getattr(args, "config", None) else None
+    user_name = os.environ.get("USERNAME") or os.environ.get("USER") or Path.home().name
+
+    print("\n" + "=" * 50)
+    print("AI Telemetry Agent — Kiro Hook Uninstaller")
+    print("=" * 50)
+    print(f"User        : {user_name}")
+    print("Removing Kiro telemetry hooks...")
+
+    success, msg, backup_path = uninstall_kiro_hooks(hooks_file=target_file)
+    if not success:
+        print(f"\nERROR: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    if backup_path:
+        print(f"Backup created:\n{backup_path}\n")
+
+    print(f"{msg}")
+    print("=" * 50 + "\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="telemetry-agent",
@@ -581,6 +1165,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_start = subparsers.add_parser("start", help="Start the telemetry collector")
     p_start.add_argument("--member", type=str, default=None, help="Override MEMBER_ID")
     p_start.add_argument("--device", type=str, default=None, help="Override DEVICE_ID")
+    p_start.add_argument("--source", "--telemetry-source", dest="source", type=str, default=None, choices=["antigravity", "kiro_cli", "kiro_ide", "auto"], help="Override TELEMETRY_SOURCE")
 
     # Status command
     subparsers.add_parser("status", help="Display collector running status and stats")
@@ -601,15 +1186,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_single_sess.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Sessions command
-    p_sess = subparsers.add_parser("sessions", help="List Antigravity sessions and correlated repositories")
+    p_sess = subparsers.add_parser("sessions", help="List AI sessions and correlated repositories")
     p_sess.add_argument("--repo", type=str, default=None, help="Filter by repository name")
+    p_sess.add_argument("--ticket", type=str, default=None, help="Filter by Jira issue key")
     p_sess.add_argument("--member", type=str, default=None, help="Filter by member ID")
     p_sess.add_argument("--limit", type=int, default=50, help="Max sessions to display (default: 50)")
     p_sess.add_argument("--json", action="store_true", help="Output raw JSON array")
 
     # Summary command
-    p_sum = subparsers.add_parser("summary", help="Show summary metrics aggregated by repository")
+    p_sum = subparsers.add_parser("summary", help="Show summary metrics aggregated by repository or Jira ticket")
     p_sum.add_argument("--repo", type=str, default=None, help="Filter by repository name")
+    p_sum.add_argument("--ticket", type=str, default=None, help="Filter or aggregate by Jira issue key")
+    p_sum.add_argument("--by-ticket", action="store_true", help="Group summary by Jira ticket instead of repository")
+    p_sum.add_argument("--from", dest="date_from", type=str, default=None, help="Filter start date (YYYY-MM-DD)")
+    p_sum.add_argument("--to", dest="date_to", type=str, default=None, help="Filter end date (YYYY-MM-DD)")
     p_sum.add_argument("--json", action="store_true", help="Output raw JSON")
 
     # Hook management commands
@@ -622,6 +1212,74 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_huninstall = subparsers.add_parser("uninstall-hook", help="Uninstall global Antigravity lifecycle hooks")
     p_huninstall.add_argument("--config", type=str, default=None, help="Custom hooks.json path")
+
+    # Kiro Hook management commands
+    p_khstatus = subparsers.add_parser("kiro-hook-status", help="Display Kiro IDE hook status")
+    p_khstatus.add_argument("--config", type=str, default=None, help="Custom hooks.json path")
+
+    p_khinstall = subparsers.add_parser("install-kiro-hook", help="Install Kiro IDE lifecycle hooks")
+    p_khinstall.add_argument("--config", type=str, default=None, help="Custom hooks.json path")
+    p_khinstall.add_argument("--python", type=str, default=None, help="Custom python executable path")
+
+    p_khuninstall = subparsers.add_parser("uninstall-kiro-hook", help="Uninstall Kiro IDE lifecycle hooks")
+    p_khuninstall.add_argument("--config", type=str, default=None, help="Custom hooks.json path")
+
+    # Jira ticket attribution commands
+    p_jira = subparsers.add_parser("jira", help="Manage Jira ticket attribution and reporting")
+    p_jira.add_argument("--repo", type=str, default=None, help="Target repository path (default: current directory)")
+    jira_subparsers = p_jira.add_subparsers(dest="jira_command", help="Jira subcommands")
+
+    # jira select <ticket>
+    p_jsel = jira_subparsers.add_parser("select", help="Select or assign a Jira ticket to current repository (validates issue existence with Jira)")
+    p_jsel.add_argument("ticket", type=str, help="Jira issue key (e.g. PROJ-148)")
+    p_jsel.add_argument("--repo", type=str, default=None, help="Target repository path")
+    p_jsel.add_argument("--allow-unverified", "--offline", dest="allow_unverified", action="store_true", help="Allow selecting an unverified issue when Jira is unconfigured or unreachable")
+
+    # jira status
+    p_jstat = jira_subparsers.add_parser("status", help="Show active Jira ticket association")
+    p_jstat.add_argument("--repo", type=str, default=None, help="Target repository path")
+    p_jstat.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # jira recent
+    p_jrec = jira_subparsers.add_parser("recent", help="List recent or previously associated Jira tickets")
+    p_jrec.add_argument("--repo", type=str, default=None, help="Target repository path")
+    p_jrec.add_argument("--limit", type=int, default=10, help="Max tickets to display (default: 10)")
+    p_jrec.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # jira clear
+    p_jclr = jira_subparsers.add_parser("clear", help="Clear current association and mark work as unassigned")
+    p_jclr.add_argument("--repo", type=str, default=None, help="Target repository path")
+
+    # jira preview
+    p_jprev = jira_subparsers.add_parser("preview", help="Preview branch-detected issue key without changing attribution")
+    p_jprev.add_argument("--repo", type=str, default=None, help="Target repository path")
+    p_jprev.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # jira confirm
+    p_jconf = jira_subparsers.add_parser("confirm", help="Confirm a proposed ticket switch (validates issue existence with Jira)")
+    p_jconf.add_argument("--repo", type=str, default=None, help="Target repository path")
+    p_jconf.add_argument("--allow-unverified", "--offline", dest="allow_unverified", action="store_true", help="Allow confirming switch when Jira is unconfigured or unreachable")
+
+    # jira summary
+    p_jsum = jira_subparsers.add_parser("summary", help="Show ticket-level aggregated usage report")
+    p_jsum.add_argument("--repo", type=str, default=None, help="Filter by repository name")
+    p_jsum.add_argument("--ticket", type=str, default=None, help="Filter by Jira issue key")
+    p_jsum.add_argument("--from", dest="date_from", type=str, default=None, help="Filter start date (YYYY-MM-DD)")
+    p_jsum.add_argument("--to", dest="date_to", type=str, default=None, help="Filter end date (YYYY-MM-DD)")
+    p_jsum.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # jira sessions
+    p_jsess = jira_subparsers.add_parser("sessions", help="List AI sessions with attributed Jira tickets")
+    p_jsess.add_argument("--repo", type=str, default=None, help="Filter by repository name")
+    p_jsess.add_argument("--ticket", type=str, default=None, help="Filter by Jira issue key")
+    p_jsess.add_argument("--member", type=str, default=None, help="Filter by member ID")
+    p_jsess.add_argument("--limit", type=int, default=50, help="Max sessions to display (default: 50)")
+    p_jsess.add_argument("--json", action="store_true", help="Output raw JSON array")
+
+    # jira test-connection
+    p_jtest = jira_subparsers.add_parser("test-connection", help="Perform read-only Jira API authentication and connectivity verification")
+    p_jtest.add_argument("--issue", "--ticket", dest="issue", type=str, default=None, help="Optional Jira issue key to test read access (e.g. SCRUM-1)")
+    p_jtest.add_argument("--json", action="store_true", help="Output raw JSON diagnostic result")
 
     # Stop command
     subparsers.add_parser("stop", help="Stop the running collector")
@@ -668,6 +1326,14 @@ def cli_entrypoint() -> None:
         cmd_install_hook(args)
     elif args.command == "uninstall-hook":
         cmd_uninstall_hook(args)
+    elif args.command == "kiro-hook-status":
+        cmd_kiro_hook_status(args)
+    elif args.command == "install-kiro-hook":
+        cmd_install_kiro_hook(args)
+    elif args.command == "uninstall-kiro-hook":
+        cmd_uninstall_kiro_hook(args)
+    elif args.command == "jira":
+        cmd_jira(args)
     elif args.command == "stop":
         cmd_stop(args)
 

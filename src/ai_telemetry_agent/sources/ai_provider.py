@@ -19,12 +19,15 @@ class AIEventBuilder:
         model: Optional[str] = None,
         session_id: Optional[str] = None,
         run_id: Optional[str] = None,
+        started_at: Optional[str] = None,
         agent_name: Optional[str] = None,
         capture_method: Optional[str] = None,
         repository: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        selected_model: Optional[str] = None,
+        resolved_model: Optional[str] = None,
     ) -> Dict[str, Any]:
-        started_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        started_at = started_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         payload = AITelemetryPayload(
             provider=provider,
             model=model,
@@ -33,6 +36,8 @@ class AIEventBuilder:
             started_at=started_at,
             agent_name=agent_name,
             capture_method=capture_method,
+            selected_model=selected_model,
+            resolved_model=resolved_model,
             metadata=sanitize_data(metadata or {}),
         )
         ctx: Dict[str, Any] = {"session_id": session_id}
@@ -65,6 +70,11 @@ class AIEventBuilder:
         repository: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         timestamp: Optional[str] = None,
+        credits: Optional[float] = None,
+        credit_unit: Optional[str] = None,
+        context_usage_percentage: Optional[float] = None,
+        selected_model: Optional[str] = None,
+        resolved_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         completed_at = timestamp or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         payload = AITelemetryPayload(
@@ -84,6 +94,11 @@ class AIEventBuilder:
             turns=turns,
             agent_name=agent_name,
             capture_method=capture_method,
+            credits=credits,
+            credit_unit=credit_unit,
+            context_usage_percentage=context_usage_percentage,
+            selected_model=selected_model,
+            resolved_model=resolved_model,
             metadata=sanitize_data(metadata or {}),
         )
         ctx: Dict[str, Any] = {"session_id": session_id}

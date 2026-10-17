@@ -16,6 +16,9 @@ from ai_telemetry_agent.sources.antigravity_probe import (
 )
 from ai_telemetry_agent.sources.git import GitSource, GitRepoState
 from ai_telemetry_agent.sources.system import SystemSource
+from ai_telemetry_agent.sources.kiro_cli_sessions import KiroCLISessionSource
+from ai_telemetry_agent.sources.kiro_ide_sessions import KiroIDESessionSource
+from ai_telemetry_agent.sources.kiro import KiroSource, KIRO_AI_TELEMETRY_STATUS
 
 __all__ = [
     "EventSource",
@@ -34,4 +37,8 @@ __all__ = [
     "GitSource",
     "GitRepoState",
     "SystemSource",
+    "KiroCLISessionSource",
+    "KiroIDESessionSource",
+    "KiroSource",
+    "KIRO_AI_TELEMETRY_STATUS",
 ]

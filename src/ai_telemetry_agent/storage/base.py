@@ -55,6 +55,21 @@ class EventStore(ABC):
         pass
 
     @abstractmethod
+    def get_session_events(self, session_id: str) -> List[TelemetryEvent]:
+        """Retrieve all events for a specific session in chronological order."""
+        pass
+
+    @abstractmethod
+    def get_events_by_session(
+        self,
+        repository_name: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> Dict[str, List[TelemetryEvent]]:
+        """Retrieve events grouped by session_id in chronological order."""
+        pass
+
+    @abstractmethod
     def get_count(self, event_type: Optional[str] = None, repository_name: Optional[str] = None) -> int:
         """Return the total number of events stored."""
         pass

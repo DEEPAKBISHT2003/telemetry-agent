@@ -99,6 +99,9 @@ def parse_dotenv(env_path: Path) -> dict:
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
+VALID_TELEMETRY_SOURCES = {"antigravity", "kiro_ide", "kiro_cli", "auto"}
+
+
 @dataclass(frozen=True)
 class Settings:
     member_id: str
@@ -112,6 +115,14 @@ class Settings:
     git_monitor_interval_seconds: int = 10
     git_monitor_paths: List[str] = field(default_factory=lambda: ["."])
     antigravity_monitor_enabled: bool = True
+    telemetry_source: str = "antigravity"
+    kiro_sessions_dir: Optional[str] = None
+    kiro_monitor_enabled: bool = True
+    jira_base_url: Optional[str] = None
+    jira_api_token: Optional[str] = None
+    jira_username: Optional[str] = None
+    jira_auth_type: str = "pat"
+    jira_key_pattern: Optional[str] = None
 
     @property
     def data_dir(self) -> Path:
@@ -182,7 +193,10 @@ def load_settings(
         "MEMBER_ID", "DEVICE_ID", "COLLECTOR_VERSION", "LOG_LEVEL",
         "HEARTBEAT_INTERVAL_SECONDS", "TELEMETRY_DATA_DIR",
         "GIT_MONITOR_INTERVAL_SECONDS", "GIT_MONITOR_PATHS",
-        "ANTIGRAVITY_MONITOR_ENABLED"
+        "ANTIGRAVITY_MONITOR_ENABLED", "TELEMETRY_SOURCE",
+        "KIRO_SESSIONS_DIR", "KIRO_MONITOR_ENABLED",
+        "JIRA_BASE_URL", "JIRA_API_TOKEN", "JIRA_PAT",
+        "JIRA_USERNAME", "JIRA_AUTH_TYPE", "JIRA_KEY_PATTERN"
     ]:
         val = os.environ.get(key)
         if val is not None:
@@ -212,6 +226,14 @@ def load_settings(
         errors.append("MEMBER_ID is required. Set it in .env or via environment variable.")
     if not final_device_id:
         errors.append("DEVICE_ID is required. Set it in .env or via environment variable.")
+
+    # Validate TELEMETRY_SOURCE
+    raw_source = (env_vars.get("TELEMETRY_SOURCE") or "antigravity").strip().lower()
+    if raw_source not in VALID_TELEMETRY_SOURCES:
+        errors.append(
+            f"Invalid TELEMETRY_SOURCE '{raw_source}'. "
+            f"Supported values: {', '.join(sorted(VALID_TELEMETRY_SOURCES))}."
+        )
 
     if errors:
         raise ConfigurationError("Configuration Error:\n" + "\n".join(f"- {err}" for err in errors))
@@ -245,6 +267,20 @@ def load_settings(
     else:
         ag_enabled = str(ag_enabled_raw).strip().lower() in ("true", "1", "yes", "t")
 
+    raw_kiro_dir = env_vars.get("KIRO_SESSIONS_DIR", "").strip() or None
+
+    kiro_enabled_raw = env_vars.get("KIRO_MONITOR_ENABLED", "true")
+    if isinstance(kiro_enabled_raw, bool):
+        kiro_enabled = kiro_enabled_raw
+    else:
+        kiro_enabled = str(kiro_enabled_raw).strip().lower() in ("true", "1", "yes", "t")
+
+    raw_jira_url = env_vars.get("JIRA_BASE_URL", "").strip() or None
+    raw_jira_token = env_vars.get("JIRA_API_TOKEN") or env_vars.get("JIRA_PAT")
+    raw_jira_username = env_vars.get("JIRA_USERNAME", "").strip() or None
+    raw_jira_auth = (env_vars.get("JIRA_AUTH_TYPE") or "pat").strip().lower()
+    raw_jira_pattern = env_vars.get("JIRA_KEY_PATTERN", "").strip() or None
+
     return Settings(
         member_id=final_member_id,
         device_id=final_device_id,
@@ -257,4 +293,12 @@ def load_settings(
         git_monitor_interval_seconds=git_interval,
         git_monitor_paths=git_paths,
         antigravity_monitor_enabled=ag_enabled,
+        telemetry_source=raw_source,
+        kiro_sessions_dir=raw_kiro_dir,
+        kiro_monitor_enabled=kiro_enabled,
+        jira_base_url=raw_jira_url,
+        jira_api_token=raw_jira_token,
+        jira_username=raw_jira_username,
+        jira_auth_type=raw_jira_auth,
+        jira_key_pattern=raw_jira_pattern,
     )

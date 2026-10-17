@@ -38,6 +38,7 @@ class EventType:
     AGENT_STARTED = "agent_started"
     AGENT_COMPLETED = "agent_completed"
     ANTIGRAVITY_DETECTED = "antigravity_detected"
+    KIRO_DETECTED = "kiro_detected"
 
     @classmethod
     def all_types(cls) -> set:
@@ -49,6 +50,7 @@ class EventType:
             cls.AI_RUN_STARTED, cls.AI_RUN_COMPLETED, cls.AI_RUN_FAILED,
             cls.AI_TURN, cls.AI_TOOL_CALL, cls.TOOL_CALL,
             cls.AGENT_STARTED, cls.AGENT_COMPLETED, cls.ANTIGRAVITY_DETECTED,
+            cls.KIRO_DETECTED,
         }
 
 
@@ -129,6 +131,11 @@ class AITelemetryPayload:
     tool_name: Optional[str] = None
     agent_name: Optional[str] = None
     capture_method: Optional[str] = None
+    credits: Optional[float] = None
+    credit_unit: Optional[str] = None
+    context_usage_percentage: Optional[float] = None
+    selected_model: Optional[str] = None
+    resolved_model: Optional[str] = None
     tools: List[Dict[str, Any]] = field(default_factory=list)
     agents: List[Dict[str, Any]] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)

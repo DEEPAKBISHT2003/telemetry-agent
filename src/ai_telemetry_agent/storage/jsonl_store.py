@@ -271,7 +271,99 @@ class JSONLEventStore(EventStore):
             f_date = fpath.name.replace("telemetry-", "").replace(".jsonl", "")
             if s_date <= f_date <= e_date:
                 matched.extend(self.read_events_for_date(f_date))
-        return matched
+    def get_session_events(self, session_id: str) -> List[TelemetryEvent]:
+        """Retrieve all events for a specific session in chronological order."""
+        if not session_id:
+            return []
+        files = self._get_jsonl_files(descending=False)
+        events: List[TelemetryEvent] = []
+        seen_event_ids: Set[str] = set()
+
+        for fpath in files:
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as fp:
+                    for line in fp:
+                        line = line.strip()
+                        if not line or f'"{session_id}"' not in line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            ev_id = data.get("event_id")
+                            if ev_id and ev_id in seen_event_ids:
+                                continue
+                            ev = TelemetryEvent.from_dict(data)
+                            sid = ev.context.session_id if ev.context else None
+                            if sid == session_id:
+                                if ev_id:
+                                    seen_event_ids.add(ev_id)
+                                events.append(ev)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+        return events
+
+    def get_events_by_session(
+        self,
+        repository_name: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> Dict[str, List[TelemetryEvent]]:
+        """Retrieve events grouped by session_id in chronological order.
+        
+        Performs a single chronological pass over JSONL files, filtering by date and repository,
+        and deduplicating events by event_id.
+        """
+        files = self._get_jsonl_files(descending=False)
+        grouped: Dict[str, List[TelemetryEvent]] = {}
+        seen_event_ids: Set[str] = set()
+
+        s_date = str(date_from)[:10] if date_from else None
+        e_date = str(date_to)[:10] if date_to else None
+
+        for fpath in files:
+            f_date = fpath.name.replace("telemetry-", "").replace(".jsonl", "")
+            if s_date and f_date < s_date:
+                continue
+            if e_date and f_date > e_date:
+                continue
+
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as fp:
+                    for line in fp:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            ev_id = data.get("event_id")
+                            if ev_id and ev_id in seen_event_ids:
+                                continue
+                            ev = TelemetryEvent.from_dict(data)
+                            sid = ev.context.session_id if ev.context else None
+                            if not sid:
+                                continue
+
+                            # Repository filter
+                            if repository_name:
+                                ev_repo = ev.context.repository if ev.context else None
+                                ev_repo_name = ev_repo.name if ev_repo else None
+                                if ev_repo_name != repository_name:
+                                    continue
+
+                            if ev_id:
+                                seen_event_ids.add(ev_id)
+
+                            if sid not in grouped:
+                                grouped[sid] = []
+                            grouped[sid].append(ev)
+                        except Exception:
+                            continue
+            except Exception:
+                continue
+
+        return grouped
 
     def get_count(self, event_type: Optional[str] = None, repository_name: Optional[str] = None) -> int:
         """Return the total number of events stored across all JSONL files."""
@@ -366,6 +458,9 @@ class JSONLEventStore(EventStore):
                                 "cache_read_tokens": 0,
                                 "total_tokens": 0,
                                 "has_token_data": False,
+                                "total_credits": 0.0,
+                                "credit_unit": None,
+                                "has_credit_data": False,
                             }
 
                         sess = sessions_map[sid]
@@ -382,6 +477,14 @@ class JSONLEventStore(EventStore):
                         model = p.get("model")
                         etype = ev.event_type
                         cm = p.get("capture_method")
+
+                        # Track credits if present
+                        creds = p.get("credits")
+                        if creds is not None and isinstance(creds, (int, float)):
+                            sess["has_credit_data"] = True
+                            sess["total_credits"] = round(sess["total_credits"] + float(creds), 4)
+                            if not sess["credit_unit"]:
+                                sess["credit_unit"] = p.get("credit_unit") or "credit"
 
                         if etype == "ai_run" or cm == "sqlite_gen_metadata":
                             sess["sqlite_gen_count"] += 1
@@ -476,6 +579,8 @@ class JSONLEventStore(EventStore):
                     "total_sessions": 0,
                     "total_ai_runs": 0,
                     "total_tool_calls": 0,
+                    "total_credits": 0.0,
+                    "has_credit_data": False,
                     "branches": set(),
                     "models_used": set(),
                     "model_counts": {},
@@ -487,6 +592,9 @@ class JSONLEventStore(EventStore):
             rsum["total_sessions"] += 1
             rsum["total_ai_runs"] += s["ai_runs_count"]
             rsum["total_tool_calls"] += s["tool_calls_count"]
+            if s.get("has_credit_data"):
+                rsum["has_credit_data"] = True
+                rsum["total_credits"] = round(rsum["total_credits"] + float(s.get("total_credits", 0.0)), 4)
             if s["branch"]:
                 rsum["branches"].add(s["branch"])
             for m in s["models"]:

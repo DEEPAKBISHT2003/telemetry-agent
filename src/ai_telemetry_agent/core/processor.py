@@ -20,10 +20,12 @@ class EventProcessor:
         identity_provider: IdentityProvider,
         collector_version: str = "0.1.2",
         default_context: Optional[ContextInfo] = None,
+        attribution_store: Optional[Any] = None,
     ):
         self.identity_provider = identity_provider
         self.collector_version = collector_version
         self.default_context = default_context or ContextInfo()
+        self.attribution_store = attribution_store
 
     def process_raw(
         self,
@@ -128,6 +130,21 @@ class EventProcessor:
                         root=p_root,
                         is_git_repo=True,
                     )
+
+            # Auto-resolve Jira ticket ID from attribution_store if not explicit
+            if not jira_task_id and self.attribution_store:
+                r_name = repo_info.name if repo_info else None
+                r_root = repo_info.root if repo_info else None
+                try:
+                    attr = self.attribution_store.find_attribution_for_event(
+                        repo_name=r_name,
+                        timestamp=timestamp,
+                        repo_root=r_root,
+                    )
+                    if attr:
+                        jira_task_id = attr.issue_key
+                except Exception:
+                    pass
 
             context_info = ContextInfo(
                 session_id=session_id,
