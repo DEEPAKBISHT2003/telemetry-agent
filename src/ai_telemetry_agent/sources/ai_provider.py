@@ -75,6 +75,8 @@ class AIEventBuilder:
         context_usage_percentage: Optional[float] = None,
         selected_model: Optional[str] = None,
         resolved_model: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         completed_at = timestamp or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         payload = AITelemetryPayload(
@@ -92,6 +94,7 @@ class AIEventBuilder:
             total_tokens=total_tokens,
             cost_usd=cost_usd,
             turns=turns,
+            tool_name=tool_name,
             agent_name=agent_name,
             capture_method=capture_method,
             credits=credits,
@@ -99,6 +102,7 @@ class AIEventBuilder:
             context_usage_percentage=context_usage_percentage,
             selected_model=selected_model,
             resolved_model=resolved_model,
+            tools=tools if tools is not None else [],
             metadata=sanitize_data(metadata or {}),
         )
         ctx: Dict[str, Any] = {"session_id": session_id}

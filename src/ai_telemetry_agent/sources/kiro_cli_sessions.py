@@ -39,6 +39,211 @@ def get_default_kiro_cli_state_file() -> Path:
     return base / "state" / "kiro_cli_state.json"
 
 
+def parse_kiro_cli_jsonl(jsonl_file: Path) -> Dict[str, Any]:
+    """Parse Kiro CLI session JSONL file and extract tool invocations and results.
+
+    Resilient to:
+    - Non-existent or empty files.
+    - Blank lines.
+    - Malformed individual JSON lines.
+    - Partially written final lines.
+    - Unknown message types.
+    - Missing toolUseId or tool names.
+    - Duplicate message records.
+    - Tool results arriving without a recognized invocation.
+    - Tool invocations without results.
+
+    Strict privacy allowlist:
+    Only captures tool_name, status, and tool_use_id.
+    Explicitly excludes input arguments, command/file paths, file contents,
+    tool outputs, prompts, and assistant response texts.
+    """
+    if not jsonl_file.is_file():
+        return {"invocations": [], "results": {}}
+
+    try:
+        content = jsonl_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"invocations": [], "results": {}}
+
+    invocations: List[Dict[str, Any]] = []
+    results: Dict[str, str] = {}
+    seen_tool_use_ids: Set[str] = set()
+
+    current_prompt_index = -1
+
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        if not isinstance(record, dict):
+            continue
+
+        kind = record.get("kind") or record.get("type") or ""
+        data = record.get("data") if isinstance(record.get("data"), dict) else {}
+        msg_id = data.get("message_id") or record.get("message_id") or record.get("id")
+
+        if kind == "Prompt":
+            current_prompt_index += 1
+
+        # 1. Tool Invocations
+        content_items: List[Any] = []
+        if isinstance(data.get("content"), list):
+            content_items.extend(data["content"])
+        if isinstance(record.get("content"), list):
+            content_items.extend(record["content"])
+
+        for item in content_items:
+            if not isinstance(item, dict):
+                continue
+            item_kind = item.get("kind") or item.get("type") or ""
+            if item_kind in ("toolUse", "tool_use"):
+                item_data = item.get("data") if isinstance(item.get("data"), dict) else item
+                tid = item_data.get("toolUseId") or item_data.get("tool_use_id") or item_data.get("id")
+                tname = item_data.get("name") or item_data.get("tool_name") or item_data.get("toolName")
+                if tname and isinstance(tname, str):
+                    tname_str = tname.strip()
+                    if tname_str:
+                        tid_str = str(tid).strip() if tid else None
+                        if tid_str and tid_str in seen_tool_use_ids:
+                            continue
+                        if tid_str:
+                            seen_tool_use_ids.add(tid_str)
+                        invocations.append({
+                            "tool_use_id": tid_str,
+                            "tool_name": tname_str,
+                            "message_id": str(msg_id) if msg_id else None,
+                            "prompt_index": current_prompt_index if current_prompt_index >= 0 else 0,
+                        })
+
+        # Standalone toolUse record
+        if kind in ("toolUse", "tool_use"):
+            item_data = data if data else record
+            tid = item_data.get("toolUseId") or item_data.get("tool_use_id") or item_data.get("id")
+            tname = item_data.get("name") or item_data.get("tool_name") or item_data.get("toolName")
+            if tname and isinstance(tname, str):
+                tname_str = tname.strip()
+                if tname_str:
+                    tid_str = str(tid).strip() if tid else None
+                    if not (tid_str and tid_str in seen_tool_use_ids):
+                        if tid_str:
+                            seen_tool_use_ids.add(tid_str)
+                        invocations.append({
+                            "tool_use_id": tid_str,
+                            "tool_name": tname_str,
+                            "message_id": str(msg_id) if msg_id else None,
+                            "prompt_index": current_prompt_index if current_prompt_index >= 0 else 0,
+                        })
+
+        # 2. Tool Results
+        for item in content_items:
+            if not isinstance(item, dict):
+                continue
+            item_kind = item.get("kind") or item.get("type") or ""
+            if item_kind in ("toolResult", "tool_result"):
+                item_data = item.get("data") if isinstance(item.get("data"), dict) else item
+                tid = item_data.get("toolUseId") or item_data.get("tool_use_id") or item_data.get("id")
+                raw_st = item_data.get("status") or item_data.get("result_status")
+                if tid and raw_st and isinstance(raw_st, str):
+                    tid_str = str(tid).strip()
+                    st_str = raw_st.strip().lower()
+                    if st_str in ("success", "ok", "completed"):
+                        results[tid_str] = "success"
+                    elif st_str in ("error", "failed", "failure"):
+                        results[tid_str] = "error"
+                    else:
+                        results[tid_str] = st_str
+
+        # Results map in ToolResults
+        res_map = data.get("results") or record.get("results")
+        if isinstance(res_map, dict):
+            for r_tid, r_val in res_map.items():
+                if not isinstance(r_val, dict):
+                    continue
+                r_inner = r_val.get("result")
+                r_tid_str = str(r_tid).strip()
+                if isinstance(r_inner, dict):
+                    if "Success" in r_inner or "success" in r_inner:
+                        results[r_tid_str] = "success"
+                    elif any(k in r_inner for k in ("Failure", "failure", "Error", "error")):
+                        results[r_tid_str] = "error"
+                elif isinstance(r_inner, str):
+                    st_str = r_inner.strip().lower()
+                    if st_str in ("success", "ok", "completed"):
+                        results[r_tid_str] = "success"
+                    elif st_str in ("error", "failed", "failure"):
+                        results[r_tid_str] = "error"
+                    else:
+                        results[r_tid_str] = st_str
+
+        # Standalone toolResult record
+        if kind in ("toolResult", "tool_result"):
+            item_data = data if data else record
+            tid = item_data.get("toolUseId") or item_data.get("tool_use_id") or item_data.get("id")
+            raw_st = item_data.get("status") or item_data.get("result_status")
+            if tid and raw_st and isinstance(raw_st, str):
+                tid_str = str(tid).strip()
+                st_str = raw_st.strip().lower()
+                if st_str in ("success", "ok", "completed"):
+                    results[tid_str] = "success"
+                elif st_str in ("error", "failed", "failure"):
+                    results[tid_str] = "error"
+                else:
+                    results[tid_str] = st_str
+
+    return {"invocations": invocations, "results": results}
+
+
+def extract_turn_tools(
+    turn: Dict[str, Any],
+    raw_turn: Dict[str, Any],
+    turn_idx: int,
+    parsed_jsonl: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Correlate tool invocations to a specific user turn and match results.
+
+    Returns an explicitly sanitized list of tool dictionaries containing only:
+    - tool_name: str
+    - status: str ('success', 'error', or 'unknown')
+    - tool_use_id: Optional[str]
+    """
+    invocations = parsed_jsonl.get("invocations", [])
+    results_map = parsed_jsonl.get("results", {})
+    if not invocations:
+        return []
+
+    raw_msg_ids = raw_turn.get("message_ids") or turn.get("message_ids")
+    if isinstance(raw_msg_ids, list) and raw_msg_ids:
+        msg_id_set = {str(m).strip() for m in raw_msg_ids if m}
+        turn_invocations = [inv for inv in invocations if inv.get("message_id") in msg_id_set]
+    else:
+        turn_invocations = [inv for inv in invocations if inv.get("prompt_index") == turn_idx]
+
+    turn_tools: List[Dict[str, Any]] = []
+    for inv in turn_invocations:
+        tname = inv.get("tool_name")
+        if not tname or not isinstance(tname, str):
+            continue
+        tid = inv.get("tool_use_id")
+        if tid and tid in results_map:
+            status = results_map[tid]
+        else:
+            status = "unknown"
+
+        turn_tools.append({
+            "tool_name": tname,
+            "status": status,
+            "tool_use_id": tid,
+        })
+
+    return turn_tools
+
+
 class KiroCLISessionSource(EventSource):
     """Event source for monitoring and parsing Kiro CLI session JSON files."""
 
@@ -79,12 +284,26 @@ class KiroCLISessionSource(EventSource):
             except Exception as e:
                 logger.warning("kiro_cli_state_load_failed", error=str(e))
                 self._state = {}
-        self._staged_state = {k: {"updated_at": v.get("updated_at"), "ingested_turns": list(v.get("ingested_turns", []))} for k, v in self._state.items()}
+        self._staged_state = {
+            k: {
+                "updated_at": v.get("updated_at"),
+                "ingested_turns": list(v.get("ingested_turns", [])),
+                "deferred_turns": dict(v.get("deferred_turns", {})) if isinstance(v.get("deferred_turns"), dict) else {},
+            }
+            for k, v in self._state.items()
+        }
 
     def commit_state(self) -> bool:
         """Atomically persist staged reader cursor state to disk."""
         try:
-            self._state = {k: {"updated_at": v.get("updated_at"), "ingested_turns": list(v.get("ingested_turns", []))} for k, v in self._staged_state.items()}
+            self._state = {
+                k: {
+                    "updated_at": v.get("updated_at"),
+                    "ingested_turns": list(v.get("ingested_turns", [])),
+                    "deferred_turns": dict(v.get("deferred_turns", {})),
+                }
+                for k, v in self._staged_state.items()
+            }
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             tmp_file = self.state_file.parent / f"{self.state_file.name}.tmp"
             tmp_file.write_text(json.dumps(self._state, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -100,6 +319,7 @@ class KiroCLISessionSource(EventSource):
             k: {
                 "updated_at": v.get("updated_at"),
                 "ingested_turns": list(v.get("ingested_turns", [])),
+                "deferred_turns": dict(v.get("deferred_turns", {})),
             }
             for k, v in self._state.items()
         }
@@ -201,12 +421,25 @@ class KiroCLISessionSource(EventSource):
         cwd = data.get("cwd") or data.get("session_state", {}).get("cwd") or os.getcwd()
 
         # Check existing state
-        session_state_entry = self._staged_state.setdefault(session_id, {"updated_at": "", "ingested_turns": []})
+        session_state_entry = self._staged_state.setdefault(
+            session_id, {"updated_at": "", "ingested_turns": [], "deferred_turns": {}}
+        )
         ingested_turn_ids: Set[str] = set(session_state_entry.get("ingested_turns", []))
+        deferred_turns: Dict[str, int] = session_state_entry.setdefault("deferred_turns", {})
 
-        # Check if already fully processed and unchanged
-        if session_state_entry.get("updated_at") == updated_at and ingested_turn_ids:
+        # Check if already fully processed and unchanged (and no pending deferred turns)
+        if not deferred_turns and session_state_entry.get("updated_at") == updated_at and ingested_turn_ids:
             return []
+
+        # Find corresponding JSONL message file
+        jsonl_path = file_path.with_suffix(".jsonl")
+        if not jsonl_path.is_file():
+            alt_path = file_path.parent / f"{session_id}.jsonl"
+            if alt_path.is_file():
+                jsonl_path = alt_path
+
+        has_jsonl = jsonl_path.is_file()
+        parsed_jsonl = parse_kiro_cli_jsonl(jsonl_path) if has_jsonl else {}
 
         conv_metadata = data.get("session_state", {}).get("conversation_metadata", {})
         user_turn_metadatas = conv_metadata.get("user_turn_metadatas", [])
@@ -240,6 +473,26 @@ class KiroCLISessionSource(EventSource):
 
             if turn_id in ingested_turn_ids:
                 continue
+
+            # Extract sanitized tools from JSONL
+            turn_tools = extract_turn_tools(turn, raw_turn, idx, parsed_jsonl)
+
+            # Delayed JSONL handling:
+            # If JSONL file exists and the turn indicates tool use was expected,
+            # but fewer tools were found in JSONL than expected:
+            expected_tools = turn.get("builtin_tool_uses") or raw_turn.get("builtin_tool_uses") or 0
+            if has_jsonl and isinstance(expected_tools, int) and expected_tools > 0 and len(turn_tools) < expected_tools:
+                deferral_count = deferred_turns.get(turn_id, 0)
+                if deferral_count < 1:
+                    deferred_turns[turn_id] = deferral_count + 1
+                    continue
+                else:
+                    # Max deferral reached; proceed with ingestion so parent credits are never lost
+                    deferred_turns.pop(turn_id, None)
+            else:
+                deferred_turns.pop(turn_id, None)
+
+            tool_name_field = turn_tools[0]["tool_name"] if len(turn_tools) == 1 else None
 
             # Model extraction and normalization
             raw_model = raw_turn.get("selected_model") or raw_turn.get("model") or turn.get("model")
@@ -340,6 +593,8 @@ class KiroCLISessionSource(EventSource):
                 total_tokens=None,
                 cost_usd=None,  # Credits kept distinct from USD
                 turns=1,
+                tool_name=tool_name_field,
+                tools=turn_tools,
                 agent_name="kiro_cli",
                 capture_method="session_json",
                 repository=repo_dict,
@@ -356,7 +611,8 @@ class KiroCLISessionSource(EventSource):
             ingested_turn_ids.add(turn_id)
 
         # Update staged state
-        session_state_entry["updated_at"] = updated_at
+        if not deferred_turns:
+            session_state_entry["updated_at"] = updated_at
         session_state_entry["ingested_turns"] = list(ingested_turn_ids)
 
         return events

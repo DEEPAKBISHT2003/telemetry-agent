@@ -1,0 +1,14 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Manual Telemetry Test - Post Tool Use",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "cmd.exe /c \"set TELEMETRY_DATA_DIR=C:\\Users\\Dell\\Desktop\\kiro-telemetry-test\\manual-hook-data&& set TELEMETRY_SOURCE=kiro_ide&& C:\\Users\\Dell\\Desktop\\telemetry-agent\\.venv\\Scripts\\python.exe C:\\Users\\Dell\\Desktop\\telemetry-agent\\src\\ai_telemetry_agent\\integrations\\hooks\\kiro_hook_handler.py PostToolUse\""
+      },
+      "enabled": true
+    }
+  ]
+}

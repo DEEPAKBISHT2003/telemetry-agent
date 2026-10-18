@@ -406,6 +406,7 @@ class JSONLEventStore(EventStore):
         # duplicate completion events from inflating accumulated duration and
         # completed-run counts.
         seen_completion_run_ids: Dict[str, Set[str]] = {}
+        seen_tool_call_ids: Dict[str, Set[str]] = {}
 
         for fpath in files:
             try:
@@ -572,6 +573,29 @@ class JSONLEventStore(EventStore):
                                 if model:
                                     sess["models"].add(model)
                                     sess["completed_model_counts"][model] = sess["completed_model_counts"].get(model, 0) + 1
+                                tools_in_payload = p.get("tools")
+                                seen_tools = seen_tool_call_ids.setdefault(sid, set())
+                                if isinstance(tools_in_payload, list) and tools_in_payload:
+                                    for t in tools_in_payload:
+                                        if isinstance(t, dict):
+                                            tn = t.get("tool_name") or t.get("name")
+                                            if tn:
+                                                sess["tools_used"].add(tn)
+                                            t_id = t.get("tool_use_id") or t.get("tool_call_id") or t.get("id")
+                                            if t_id:
+                                                if t_id not in seen_tools:
+                                                    seen_tools.add(t_id)
+                                                    sess["tool_calls_count"] += 1
+                                            else:
+                                                sess["tool_calls_count"] += 1
+                                elif p.get("tool_name"):
+                                    tn = p.get("tool_name")
+                                    sess["tools_used"].add(tn)
+                                    comp_key = p.get("run_id") or p.get("execution_id") or ev.event_id
+                                    tool_key = f"{comp_key}:{tn}"
+                                    if tool_key not in seen_tools:
+                                        seen_tools.add(tool_key)
+                                        sess["tool_calls_count"] += 1
 
                         elif etype == "ai_run_started":
                             sess["started_runs_count"] += 1
@@ -580,12 +604,25 @@ class JSONLEventStore(EventStore):
                                 sess["started_model_counts"][model] = sess["started_model_counts"].get(model, 0) + 1
 
                         elif etype in ("ai_tool_call", "tool_call"):
-                            sess["tool_calls_count"] += 1
                             tname = p.get("tool_name")
                             if tname:
                                 sess["tools_used"].add(tname)
                             if model:
                                 sess["models"].add(model)
+                            meta = p.get("metadata") or {}
+                            t_id = (
+                                meta.get("tool_use_id")
+                                or meta.get("tool_call_id")
+                                or p.get("run_id")
+                                or p.get("tool_call_id")
+                            )
+                            seen_tools = seen_tool_call_ids.setdefault(sid, set())
+                            if t_id:
+                                if t_id not in seen_tools:
+                                    seen_tools.add(t_id)
+                                    sess["tool_calls_count"] += 1
+                            else:
+                                sess["tool_calls_count"] += 1
             except Exception:
                 continue
 

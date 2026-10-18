@@ -535,10 +535,27 @@ class TelemetryCollector:
         cm = payload.get("capture_method", "")
         if (
             provider == "kiro_ide"
-            and cm == "messages_jsonl"
             and (
-                event.event_type in (EventType.AI_TOOL_CALL, EventType.TOOL_CALL)
-                or (event.event_type == EventType.AI_TURN and metadata.get("key") == "contextUsage")
+                (
+                    cm == "messages_jsonl"
+                    and (
+                        event.event_type in (
+                            EventType.AI_TOOL_CALL,
+                            EventType.TOOL_CALL,
+                        )
+                        or (
+                            event.event_type == EventType.AI_TURN
+                            and metadata.get("key") == "contextUsage"
+                        )
+                    )
+                )
+                or (
+                    cm == "kiro_hooks"
+                    and event.event_type in (
+                        EventType.AI_TOOL_CALL,
+                        EventType.TOOL_CALL,
+                    )
+                )
             )
         ):
             return None
