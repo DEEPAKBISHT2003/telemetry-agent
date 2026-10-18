@@ -137,6 +137,39 @@ def process_kiro_hook(hook_trigger: str, collector: Optional[TelemetryCollector]
             event = collector.processor.process_raw(raw_event)
             if event:
                 collector.store.save_event(event)
+                rec = collector._ai_event_to_operation_record(event)
+                if rec:
+                    try:
+                        collector.accounting_store.save_operation(rec)
+                    except Exception:
+                        pass
+
+        is_shell = hook_trigger in ("PostFileSave", "PostFileCreate", "PostFileDelete")
+        initiates_ai = hook_trigger in ("UserPromptSubmit", "user_prompt_submit", "SessionStart", "session_start")
+        is_schedule = bool(clean_meta.get("is_schedule") or data.get("schedule_expression"))
+        if is_schedule:
+            trig = "scheduled"
+        elif hook_trigger in ("UserPromptSubmit", "user_prompt_submit", "SessionStart", "session_start"):
+            trig = "manual"
+        else:
+            trig = "event_driven"
+
+        try:
+            collector.hook_registry.record_execution(
+                hook_id=f"kiro_{hook_trigger.lower()}",
+                hook_name=hook_trigger,
+                trigger_type=trig,
+                provider="kiro_ide",
+                session_id=session_id,
+                is_shell_only=is_shell,
+                initiates_ai=initiates_ai,
+                credits_used=0 if is_shell else None,
+                measurement_status="measured" if is_shell else "unavailable",
+                schedule_expression=data.get("schedule_expression"),
+                metadata=clean_meta,
+            )
+        except Exception:
+            pass
 
     except Exception:
         # Fast and resilient: telemetry failure must never block user workflow

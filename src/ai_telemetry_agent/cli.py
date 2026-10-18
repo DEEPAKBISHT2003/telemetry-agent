@@ -66,6 +66,10 @@ from ai_telemetry_agent.sources.antigravity import ANTIGRAVITY_AI_TELEMETRY_STAT
 from ai_telemetry_agent.sources.kiro import KIRO_AI_TELEMETRY_STATUS
 from ai_telemetry_agent.storage.base import EventStore
 from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
+from ai_telemetry_agent.accounting.aggregator import AccountingAggregator
+from ai_telemetry_agent.accounting.models import AIOperationRecord
+from ai_telemetry_agent.accounting.registry import HookRegistry
+from ai_telemetry_agent.accounting.store import AccountingStore
 
 
 def _safe_print(text: str = "", **kwargs) -> None:
@@ -322,6 +326,37 @@ def cmd_status(args: argparse.Namespace) -> None:
     print("=" * 50 + "\n")
 
 
+def _event_source_label(ev) -> str:
+    """Determine the displayed SOURCE label for a telemetry event.
+
+    Distinguishes the telemetry provider (kiro_ide / kiro_cli / antigravity)
+    from the capture method. Kiro IDE/CLI session-file events use ai_*
+    event types with non-`kiro_` capture methods (ide_session_files,
+    messages_jsonl, session_json) and must still be labeled ``kiro`` --
+    not the ``antigravity`` catch-all fallback that the previous
+    event_type-only logic produced.
+    """
+    p = ev.payload or {}
+    etype = ev.event_type
+    if etype.startswith("git_"):
+        return "git"
+    provider = p.get("provider")
+    if provider in ("kiro_ide", "kiro_cli"):
+        return "kiro"
+    # Kiro events captured via hooks use capture_method="kiro_hooks"; the
+    # kiro_detected detection event is also Kiro-originated.
+    if etype == "kiro_detected" or p.get("capture_method", "").startswith("kiro_"):
+        return "kiro"
+    if provider == "antigravity":
+        return "antigravity"
+    # Legacy fallback: an AI event without an explicit provider. Kept so
+    # historical records written before providers were populated still
+    # display a reasonable label instead of "system".
+    if etype.startswith("ai_") or etype in {"tool_call", "agent_started", "agent_completed"}:
+        return "antigravity"
+    return "system"
+
+
 def cmd_events(args: argparse.Namespace) -> None:
     """Inspect locally collected telemetry events."""
     try:
@@ -338,6 +373,13 @@ def cmd_events(args: argparse.Namespace) -> None:
         session_id=args.session,
         descending=False if args.asc else True,
     )
+
+    # Filter by displayed source (provider-based) when --source is given.
+    # Native filtering is by event_type/repo; source is a derived label, so
+    # we apply it client-side after retrieval.
+    source_filter = getattr(args, "source", None)
+    if source_filter:
+        events = [e for e in events if _event_source_label(e) == source_filter]
 
     if not events:
         print("No events found matching query criteria.")
@@ -356,34 +398,28 @@ def cmd_events(args: argparse.Namespace) -> None:
         etype = ev.event_type
         mid = ev.identity.member_id
         dev = ev.collector.device_id
+        p = ev.payload or {}
 
-        # Determine source
-        if etype.startswith("git_"):
-            source = "git"
-            details = f"repo={ev.payload.get('repository', '')} branch={ev.payload.get('branch', '')}"
-            if "commit_sha" in ev.payload:
-                details += f" sha={ev.payload.get('commit_sha')[:7]}"
-        elif etype == "kiro_detected" or (ev.payload and ev.payload.get("capture_method", "").startswith("kiro_")):
-            source = "kiro"
-            details = f"provider={ev.payload.get('provider')} model={ev.payload.get('model')}"
-            if ev.payload.get("tool_name"):
-                details = f"tool={ev.payload.get('tool_name')} " + details
-            if ev.payload.get("credits") is not None:
-                details += f" credits={ev.payload.get('credits')}"
-            if ev.context.repository and ev.context.repository.name:
-                details += f" repo={ev.context.repository.name}"
-        elif etype.startswith("ai_") or etype in {"tool_call", "agent_started", "agent_completed"}:
-            source = "antigravity"
-            details = f"provider={ev.payload.get('provider')} model={ev.payload.get('model')}"
-            if ev.payload.get("tool_name"):
-                details = f"tool={ev.payload.get('tool_name')} " + details
+        # Determine the displayed source from the authoritative provider field
+        # (with event-type fallbacks for non-AI telemetry).
+        source = _event_source_label(ev)
+
+        if source == "git":
+            details = f"repo={p.get('repository', '')} branch={p.get('branch', '')}"
+            if "commit_sha" in p:
+                details += f" sha={p.get('commit_sha')[:7]}"
+        elif source in ("kiro", "antigravity"):
+            details = f"provider={p.get('provider')} model={p.get('model')}"
+            if p.get("tool_name"):
+                details = f"tool={p.get('tool_name')} " + details
+            if p.get("credits") is not None:
+                details += f" credits={p.get('credits')}"
             if ev.context.repository and ev.context.repository.name:
                 details += f" repo={ev.context.repository.name}"
         else:
-            source = "system"
-            details = f"status={ev.payload.get('status', ev.payload.get('process_status', ''))}"
-            if "uptime_seconds" in ev.payload:
-                details += f" uptime={ev.payload['uptime_seconds']}s"
+            details = f"status={p.get('status', p.get('process_status', ''))}"
+            if "uptime_seconds" in p:
+                details += f" uptime={p['uptime_seconds']}s"
 
         print(f"{ts:<22} | {etype:<26} | {mid:<8} | {dev:<10} | {source:<12} | {details}")
     print("-" * 110 + "\n")
@@ -425,7 +461,10 @@ def cmd_session(args: argparse.Namespace) -> None:
     print(f"Device ID  : {s['device_id']}")
     print(f"Started At : {s['started_at']}")
     print(f"Last Active: {s['last_activity_at']}")
-    print(f"Duration   : {s['duration_seconds']}s")
+    _dur = s.get("duration_seconds")
+    print(f"Duration   : {_dur}s" if _dur is not None else "Duration   : unknown (no measured AI operation)")
+    _span = s.get("session_activity_span_seconds")
+    print(f"Activity Span: {_span}s (first-to-last event wall-clock)" if _span is not None else "Activity Span: unknown")
     print(f"AI Runs    : {s['ai_runs_count']}")
     print(f"Tool Calls : {s['tool_calls_count']}\n")
 
@@ -507,7 +546,8 @@ def cmd_sessions(args: argparse.Namespace) -> None:
         models_str = ", ".join(s.get("models", [])) if s.get("models") else (s.get("model") or "unknown")
         ai_runs = s["ai_runs_count"]
         credits_str = f"{s.get('total_credits', 0.0):.2f}" if s.get("has_credit_data") else "-"
-        duration = f"{s['duration_seconds']}s"
+        _dur = s.get("duration_seconds")
+        duration = f"{_dur}s" if _dur is not None else "unknown"
 
         print(f"{sid:<38} | {tkt:<10} | {repo:<16} | {branch:<12} | {models_str:<30} | {ai_runs:<5} | {credits_str:<10} | {duration}")
     print("-" * 150 + "\n")
@@ -945,6 +985,347 @@ def cmd_jira(args: argparse.Namespace) -> None:
             sys.exit(1)
 
 
+def _get_accounting_store(settings: Optional[Settings] = None) -> AccountingStore:
+    """Resolve active accounting store."""
+    if settings is None:
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = None
+    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
+    return AccountingStore(data_dir)
+
+
+def _get_hook_registry(settings: Optional[Settings] = None) -> HookRegistry:
+    """Resolve active hook registry."""
+    if settings is None:
+        try:
+            settings = load_settings()
+        except Exception:
+            settings = None
+    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
+    return HookRegistry(data_dir)
+
+
+def cmd_accounting(args: argparse.Namespace) -> None:
+    """Handle AI credit expenditure accounting commands."""
+    try:
+        settings = load_settings(env_file=getattr(args, "env_file", None))
+    except Exception:
+        settings = None
+
+    store = _get_accounting_store(settings)
+    aggregator = AccountingAggregator(store)
+    action = getattr(args, "accounting_command", None)
+
+    if not action:
+        _safe_print("Error: Accounting action required. Run 'telemetry-agent accounting --help' for available commands.")
+        sys.exit(1)
+
+    if action == "summary":
+        _handle_accounting_summary(args, aggregator)
+    elif action == "operations":
+        _handle_accounting_operations(args, store)
+    elif action == "operation":
+        _handle_accounting_operation(args, store)
+    elif action == "reconciliation":
+        _handle_accounting_reconciliation(args, aggregator)
+    elif action == "hooks":
+        _handle_accounting_hooks(args, settings)
+    elif action == "import-events":
+        _handle_accounting_import_events(args, store, settings)
+
+
+def _handle_accounting_summary(args: argparse.Namespace, aggregator: AccountingAggregator) -> None:
+    summary = aggregator.get_summary(
+        date_from=getattr(args, "date_from", None),
+        date_to=getattr(args, "date_to", None),
+        jira_key=getattr(args, "ticket", None),
+        repository_name=getattr(args, "repo", None),
+        provider=getattr(args, "provider", None),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(summary, indent=2))
+        return
+
+    _safe_print("=" * 70)
+    _safe_print("AI CREDIT EXPENDITURE SUMMARY")
+    _safe_print("=" * 70)
+    _safe_print(f"Total Operations Analyzed : {summary['total_operations_count']}")
+    
+    meas_cnt = summary.get("measured_operations_count")
+    unmeas_cnt = summary.get("unmeasured_operations_count")
+    if meas_cnt is not None and unmeas_cnt is not None:
+        _safe_print(f"Operational Coverage      : {meas_cnt} measured ops, {unmeas_cnt} unmeasured ops")
+
+    _safe_print(f"Total Measured Credits    : {summary['total_measured_credits_exact']} credits (Kiro CLI & IDE only)")
+
+    inter = summary["interactive_vs_automated"]["interactive"]
+    auto = summary["interactive_vs_automated"]["automated"]
+    _safe_print(f"Interactive Expenditure   : {inter['credits_exact']} credits ({inter['count']} ops: user prompts & queries)")
+    _safe_print(f"Automated Expenditure     : {auto['credits_exact']} credits ({auto['count']} ops: tool calls & subagents)")
+
+    sub = summary["subagent_expenditure"]
+    _safe_print(f"Subagent Expenditure      : {sub['credits_exact']} credits ({sub['count']} ops)")
+
+    failed = summary["failed_and_retried"]["failed"]
+    retried = summary["failed_and_retried"]["retried"]
+    _safe_print(f"Failed Operations         : {failed['credits_exact']} credits ({failed['count']} ops)")
+    _safe_print(f"Retried Operations        : {retried['credits_exact']} credits ({retried['count']} ops)")
+
+    if summary.get("cross_provider_coverage_note"):
+        _safe_print(f"\n[Coverage Note] {summary['cross_provider_coverage_note']}")
+
+    by_prov = getattr(args, "by_provider", False)
+    by_trig = getattr(args, "by_trigger", False)
+    by_hook = getattr(args, "by_hook", False)
+    by_tick = getattr(args, "by_ticket", False)
+    by_model = getattr(args, "by_model", False)
+
+    show_all = not any([by_prov, by_trig, by_hook, by_tick, by_model])
+
+    if by_prov or show_all:
+        _safe_print("\n--- By Provider ---")
+        for prov, data in summary["by_provider"].items():
+            unmeas = f", unmeasured: {data['unmeasured_count']}" if data.get("unmeasured_count") else ""
+            _safe_print(f"  {prov:<16}: {data['credits_exact']} credits ({data['count']} ops{unmeas})")
+
+    if show_all:
+        _safe_print("\n--- By Operation Type ---")
+        for op_t, data in summary["by_operation_type"].items():
+            _safe_print(f"  {op_t:<16}: {data['credits_exact']} credits ({data['count']} ops)")
+
+    if by_trig or show_all:
+        _safe_print("\n--- By Trigger Type ---")
+        for trig, data in summary["by_trigger_type"].items():
+            _safe_print(f"  {trig:<16}: {data['credits_exact']} credits ({data['count']} ops)")
+
+    if by_tick or show_all:
+        _safe_print("\n--- Jira Ticket Attribution ---")
+        tickets = summary["jira_attribution"]["attributed_tickets"]
+        if tickets:
+            for t_key, data in tickets.items():
+                _safe_print(f"  {t_key:<16}: {data['credits_exact']} credits ({data['count']} ops, {data['sessions_count']} sessions)")
+        else:
+            _safe_print("  No attributed tickets found.")
+        unassigned = summary["jira_attribution"]["unassigned"]
+        if unassigned["count"] > 0:
+            _safe_print(f"  UNASSIGNED      : {unassigned['credits_exact']} credits ({unassigned['count']} ops)")
+
+    if by_model or show_all:
+        _safe_print("\n--- By Model ---")
+        for mdl, data in summary["by_model"].items():
+            _safe_print(f"  {mdl:<25}: {data['credits_exact']} credits ({data['count']} ops)")
+
+    if by_hook:
+        _safe_print("\n--- By Hook ---")
+        hooks = summary["by_hook"]
+        if hooks:
+            for h_name, data in hooks.items():
+                _safe_print(f"  {h_name:<25}: {data['credits_exact']} credits ({data['count']} ops, trigger: {data['trigger']})")
+        else:
+            _safe_print("  No hook-attributed operations found.")
+
+    _safe_print("=" * 70)
+
+
+def _handle_accounting_operations(args: argparse.Namespace, store: AccountingStore) -> None:
+    ops = store.get_operations(
+        session_id=getattr(args, "session", None),
+        jira_key=getattr(args, "ticket", None),
+        provider=getattr(args, "provider", None),
+        operation_type=getattr(args, "type", None),
+        trigger_type=getattr(args, "trigger", None),
+        measurement_status=getattr(args, "status", None),
+        limit=getattr(args, "limit", 50),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps([op.to_dict() for op in ops], indent=2))
+        return
+
+    if not ops:
+        _safe_print("No accounting operation records found matching filters.")
+        return
+
+    _safe_print("=" * 115)
+    _safe_print(f"{'TIMESTAMP':<20} | {'OPERATION ID':<24} | {'PROVIDER':<10} | {'TYPE':<12} | {'TRIGGER':<15} | {'CREDITS':<10} | {'STATUS':<10} | {'JIRA'}")
+    _safe_print("-" * 115)
+    for op in ops:
+        ts = (op.completed_at or op.started_at or "")[:19]
+        op_id = op.operation_id[:24]
+        prov = op.provider[:10]
+        op_t = op.operation_type[:12]
+        trig = op.trigger_type[:15]
+        creds = str(op.credits_used) if op.credits_used is not None else "-"
+        status = op.measurement_status[:10]
+        jira = op.jira_key or "UNASSIGNED"
+        _safe_print(f"{ts:<20} | {op_id:<24} | {prov:<10} | {op_t:<12} | {trig:<15} | {creds:<10} | {status:<10} | {jira}")
+    _safe_print("=" * 115)
+
+
+def _handle_accounting_operation(args: argparse.Namespace, store: AccountingStore) -> None:
+    op_id = getattr(args, "id", None)
+    if not op_id:
+        _safe_print("Error: --id <OPERATION_ID> is required.")
+        sys.exit(1)
+
+    op = store.get_operation(op_id)
+    if not op:
+        _safe_print(f"Error: Operation record with ID '{op_id}' not found.")
+        sys.exit(1)
+
+    if getattr(args, "json", False):
+        print(json.dumps(op.to_dict(), indent=2))
+        return
+
+    _safe_print("=" * 60)
+    _safe_print(f"AI OPERATION RECORD: {op.operation_id}")
+    _safe_print("=" * 60)
+    _safe_print(f"Provider             : {op.provider}")
+    _safe_print(f"Source               : {op.source}")
+    _safe_print(f"Operation Type       : {op.operation_type}")
+    _safe_print(f"Trigger Type         : {op.trigger_type}")
+    if op.hook_name:
+        _safe_print(f"Hook Name            : {op.hook_name} ({op.hook_id})")
+    _safe_print(f"Session ID           : {op.session_id}")
+    if op.parent_operation_id:
+        _safe_print(f"Parent Operation ID  : {op.parent_operation_id}")
+    if op.parent_session_id:
+        _safe_print(f"Parent Session ID    : {op.parent_session_id}")
+    if op.request_id:
+        _safe_print(f"Request ID           : {op.request_id}")
+    _safe_print(f"Model Requested      : {op.model_requested or 'none'}")
+    _safe_print(f"Model Resolved       : {op.model_resolved or 'none'}")
+    _safe_print(f"Started At           : {op.started_at or 'none'}")
+    _safe_print(f"Completed At         : {op.completed_at or 'none'}")
+    _safe_print(f"Credits Used         : {op.credits_used if op.credits_used is not None else 'unavailable'}")
+    if op.credit_source:
+        _safe_print(f"Credit Source        : {op.credit_source}")
+    _safe_print(f"Measurement Scope    : {op.measurement_scope}")
+    _safe_print(f"Measurement Status   : {op.measurement_status}")
+    if op.token_usage:
+        _safe_print(f"Token Usage          : {op.token_usage}")
+    if op.cost_estimate_usd is not None:
+        _safe_print(f"Cost Estimate (USD)  : ${op.cost_estimate_usd:.6f}")
+    _safe_print(f"Jira Key             : {op.jira_key or 'UNASSIGNED'}")
+    if op.repository:
+        _safe_print(f"Repository           : {op.repository.get('name')}")
+    if op.branch:
+        _safe_print(f"Branch               : {op.branch}")
+    _safe_print(f"Developer ID         : {op.developer_id or 'none'}")
+    _safe_print(f"Device ID            : {op.device_id or 'none'}")
+    _safe_print(f"Execution Status     : {op.execution_status}")
+    _safe_print(f"Deduplication Key    : {op.deduplication_key}")
+    if op.metadata:
+        _safe_print(f"Metadata             : {json.dumps(op.metadata, indent=2)}")
+    _safe_print("=" * 60)
+
+
+def _handle_accounting_reconciliation(args: argparse.Namespace, aggregator: AccountingAggregator) -> None:
+    session_id = getattr(args, "session", None)
+    if session_id:
+        res = aggregator.reconcile_session(session_id)
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+            return
+
+        _safe_print("=" * 60)
+        _safe_print(f"SESSION RECONCILIATION: {session_id}")
+        _safe_print("=" * 60)
+        _safe_print(f"Operations Count     : {res['operation_count']}")
+        _safe_print(f"Operation Sum Credits: {res['operation_credits_exact']} credits")
+        _safe_print(f"Session Scope Credits: {res['session_scope_credits_exact'] or 'none'}")
+        _safe_print(f"Discrepancy          : {res['discrepancy_exact'] or '0'} credits")
+        _safe_print(f"Status               : {'RECONCILED' if res['reconciled'] else 'VARIANCE_DETECTED'}")
+        _safe_print("=" * 60)
+    else:
+        summary = aggregator.get_summary()
+        recon = summary["reconciliation"]
+        if getattr(args, "json", False):
+            print(json.dumps(recon, indent=2))
+            return
+
+        _safe_print("=" * 60)
+        _safe_print("ACCOUNT & PROVIDER RECONCILIATION")
+        _safe_print("=" * 60)
+        _safe_print(f"Total Operation Credits : {recon['operation_sum_credits_exact']} credits")
+        _safe_print(f"Total Session Credits   : {recon['session_sum_credits_exact']} credits")
+        _safe_print(f"Latest Account Credits  : {recon['latest_account_checkpoint_credits_exact'] or 'none'}")
+        _safe_print(f"Reconciliation Variance : {recon['reconciliation_discrepancy_exact'] or 'none'}")
+        _safe_print("=" * 60)
+
+
+def _handle_accounting_hooks(args: argparse.Namespace, settings: Optional[Settings]) -> None:
+    registry = _get_hook_registry(settings)
+    hooks = registry.get_registered_hooks()
+    execs = registry.get_executions(limit=getattr(args, "limit", 50))
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "registered_hooks": [h.to_dict() for h in hooks],
+            "executions": [e.to_dict() for e in execs],
+        }, indent=2))
+        return
+
+    _safe_print("=" * 95)
+    _safe_print("REGISTERED HOOKS")
+    _safe_print("=" * 95)
+    if hooks:
+        for h in hooks:
+            ai_flag = "AI-Initiating" if h.is_ai_powered else "Shell-Only"
+            sched = f" (cadence: {h.schedule_expression})" if h.schedule_expression else ""
+            _safe_print(f"  {h.hook_name:<20} | Type: {h.trigger_type:<15}{sched} | Class: {ai_flag}")
+    else:
+        _safe_print("  No explicitly registered hooks in registry.")
+
+    _safe_print("\n" + "=" * 95)
+    _safe_print("RECENT HOOK EXECUTIONS")
+    _safe_print("=" * 95)
+    _safe_print(f"{'EXECUTED AT':<20} | {'HOOK NAME':<20} | {'TRIGGER':<15} | {'CLASS':<12} | {'CREDITS':<10} | {'OUTCOME'}")
+    _safe_print("-" * 95)
+    if execs:
+        for e in execs:
+            ts = e.executed_at[:19]
+            name = e.hook_name[:20]
+            trig = e.trigger_type[:15]
+            cls_name = "Shell-Only" if e.is_shell_only else ("AI-Init" if e.initiates_ai else "Standard")
+            creds = str(e.credits_used) if e.credits_used is not None else "unavail"
+            out = e.outcome
+            _safe_print(f"{ts:<20} | {name:<20} | {trig:<15} | {cls_name:<12} | {creds:<10} | {out}")
+    else:
+        _safe_print("  No hook executions recorded.")
+    _safe_print("=" * 95)
+
+
+def _handle_accounting_import_events(
+    args: argparse.Namespace,
+    store: AccountingStore,
+    settings: Optional[Settings],
+) -> None:
+    """Import historical telemetry events from telemetry-*.jsonl files into the accounting store."""
+    from ai_telemetry_agent.core.collector import TelemetryCollector
+
+    collector = TelemetryCollector(settings=settings)
+    stats = store.backfill_from_event_store(collector._ai_event_to_operation_record)
+
+    if getattr(args, "json", False):
+        print(json.dumps(stats, indent=2))
+        return
+
+    _safe_print("=" * 60)
+    _safe_print("ACCOUNTING EVENT IMPORT SUMMARY")
+    _safe_print("=" * 60)
+    _safe_print(f"Files Scanned       : {stats['files_scanned']}")
+    _safe_print(f"Events Scanned      : {stats['events_scanned']}")
+    _safe_print(f"Operations Created  : {stats['records_created']}")
+    _safe_print(f"Operations Saved    : {stats['records_saved']}")
+    _safe_print(f"Duplicates Skipped  : {stats['records_skipped']}")
+    _safe_print(f"Conversion Errors   : {stats['conversion_errors']}")
+    _safe_print("=" * 60)
+
+
 def cmd_stop(args: argparse.Namespace) -> None:
     """Stop a running collector instance via pid file with stale PID protection."""
     try:
@@ -1177,6 +1558,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_events.add_argument("--member", type=str, default=None, help="Filter by member ID")
     p_events.add_argument("--repo", type=str, default=None, help="Filter by repository name")
     p_events.add_argument("--session", type=str, default=None, help="Filter by session ID")
+    p_events.add_argument("--source", type=str, default=None, choices=["antigravity", "kiro", "git", "system"], help="Filter by displayed telemetry source/provider")
     p_events.add_argument("--asc", action="store_true", help="Sort in ascending order (oldest first)")
     p_events.add_argument("--json", action="store_true", help="Output raw JSON array")
 
@@ -1284,6 +1666,55 @@ def build_parser() -> argparse.ArgumentParser:
     # Stop command
     subparsers.add_parser("stop", help="Stop the running collector")
 
+    # Accounting commands
+    p_acc = subparsers.add_parser("accounting", help="Comprehensive AI credit expenditure accounting and reconciliation")
+    acc_subparsers = p_acc.add_subparsers(dest="accounting_command", help="Accounting subcommands")
+
+    # accounting summary
+    p_asum = acc_subparsers.add_parser("summary", help="Show AI credit expenditure summary across dimensions")
+    p_asum.add_argument("--by-provider", action="store_true", help="Group expenditure by AI provider")
+    p_asum.add_argument("--by-trigger", action="store_true", help="Group expenditure by trigger mechanism")
+    p_asum.add_argument("--by-hook", action="store_true", help="Group expenditure by agent hook")
+    p_asum.add_argument("--by-ticket", action="store_true", help="Group expenditure by Jira ticket")
+    p_asum.add_argument("--by-repo", dest="by_repo", action="store_true", help="Group expenditure by repository")
+    p_asum.add_argument("--by-model", action="store_true", help="Group expenditure by AI model")
+    p_asum.add_argument("--ticket", type=str, default=None, help="Filter by Jira issue key")
+    p_asum.add_argument("--repo", type=str, default=None, help="Filter by repository name")
+    p_asum.add_argument("--provider", type=str, default=None, help="Filter by AI provider")
+    p_asum.add_argument("--from", dest="date_from", type=str, default=None, help="Filter start date (YYYY-MM-DD)")
+    p_asum.add_argument("--to", dest="date_to", type=str, default=None, help="Filter end date (YYYY-MM-DD)")
+    p_asum.add_argument("--json", action="store_true", help="Output raw JSON summary")
+
+    # accounting operations
+    p_aops = acc_subparsers.add_parser("operations", help="List individual granular AI operation records")
+    p_aops.add_argument("--limit", type=int, default=50, help="Max operations to display (default: 50)")
+    p_aops.add_argument("--session", type=str, default=None, help="Filter by session ID")
+    p_aops.add_argument("--ticket", type=str, default=None, help="Filter by Jira issue key")
+    p_aops.add_argument("--provider", type=str, default=None, help="Filter by AI provider")
+    p_aops.add_argument("--type", dest="type", type=str, default=None, help="Filter by operation type")
+    p_aops.add_argument("--trigger", type=str, default=None, help="Filter by trigger type")
+    p_aops.add_argument("--status", type=str, default=None, help="Filter by measurement or execution status")
+    p_aops.add_argument("--json", action="store_true", help="Output raw JSON array")
+
+    # accounting operation
+    p_aop = acc_subparsers.add_parser("operation", help="Display full provenance and audit trail for a single operation")
+    p_aop.add_argument("--id", type=str, required=True, help="Operation ID")
+    p_aop.add_argument("--json", action="store_true", help="Output raw JSON record")
+
+    # accounting reconciliation
+    p_arec = acc_subparsers.add_parser("reconciliation", help="Reconcile granular operation expenditure against session/account totals")
+    p_arec.add_argument("--session", type=str, default=None, help="Optional session ID to reconcile")
+    p_arec.add_argument("--json", action="store_true", help="Output raw JSON reconciliation report")
+
+    # accounting hooks
+    p_ahook = acc_subparsers.add_parser("hooks", help="Inspect registered hooks and recent hook execution lifecycle events")
+    p_ahook.add_argument("--limit", type=int, default=50, help="Max executions to display (default: 50)")
+    p_ahook.add_argument("--json", action="store_true", help="Output raw JSON registry data")
+
+    # accounting import-events
+    p_aimport = acc_subparsers.add_parser("import-events", help="Safely import historical telemetry events into the accounting ledger")
+    p_aimport.add_argument("--json", action="store_true", help="Output raw JSON import summary")
+
     return parser
 
 
@@ -1334,6 +1765,8 @@ def cli_entrypoint() -> None:
         cmd_uninstall_kiro_hook(args)
     elif args.command == "jira":
         cmd_jira(args)
+    elif args.command == "accounting":
+        cmd_accounting(args)
     elif args.command == "stop":
         cmd_stop(args)
 

@@ -6,6 +6,7 @@ using UTC dates, append-only JSON lines, and thread/process-safe writes.
 
 from datetime import datetime, timezone
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -400,6 +401,11 @@ class JSONLEventStore(EventStore):
         """Query and aggregate distinct session records with multi-model breakdown."""
         files = self._get_jsonl_files(descending=False)
         sessions_map: Dict[str, Dict[str, Any]] = {}
+        # Per-session set of completion run_ids, kept outside the session dict so
+        # it never leaks into serialized session summaries. Used to prevent
+        # duplicate completion events from inflating accumulated duration and
+        # completed-run counts.
+        seen_completion_run_ids: Dict[str, Set[str]] = {}
 
         for fpath in files:
             try:
@@ -450,6 +456,7 @@ class JSONLEventStore(EventStore):
                                 "started_at": ev.timestamp,
                                 "last_activity_at": ev.timestamp,
                                 "duration_seconds": 0.0,
+                                "recorded_turn_duration_seconds": 0.0,
                                 "ai_runs_count": 0,
                                 "tool_calls_count": 0,
                                 "tools_used": set(),
@@ -478,9 +485,57 @@ class JSONLEventStore(EventStore):
                         etype = ev.event_type
                         cm = p.get("capture_method")
 
-                        # Track credits if present
+                        # Deduplicate completion events by run_id so duplicate
+                        # ai_run_completed records (e.g. after a cursor reset) cannot
+                        # inflate accumulated duration or completed-run counts.
+                        # Falls back to event_id when no run_id is present.
+                        is_duplicate_completion = False
+                        if etype == "ai_run_completed":
+                            comp_key = p.get("run_id") or p.get("execution_id") or ev.event_id
+                            seen_completions = seen_completion_run_ids.setdefault(sid, set())
+                            if comp_key in seen_completions:
+                                is_duplicate_completion = True
+                            else:
+                                seen_completions.add(comp_key)
+
+                        # Preserve authoritative AI operation durations for session
+                        # summaries. Applies to Kiro CLI (session_json) and Kiro IDE
+                        # (messages_jsonl). For CLI, prefer metadata.turn_duration_ms
+                        # then fall back to payload.duration_ms (preserving the
+                        # verified CLI fallback). For IDE, use payload.duration_ms
+                        # (sourced from elapsedTime) directly.
+                        if (
+                            etype == "ai_run_completed"
+                            and cm in ("session_json", "messages_jsonl")
+                            and not is_duplicate_completion
+                        ):
+                            metadata = p.get("metadata") if isinstance(p.get("metadata"), dict) else {}
+                            duration_ms = metadata.get("turn_duration_ms")
+
+                            # Fall back to the normalized payload duration when metadata lacks it.
+                            if duration_ms is None:
+                                duration_ms = p.get("duration_ms")
+
+                            is_valid_duration = False
+                            if isinstance(duration_ms, (int, float)) and not isinstance(duration_ms, bool):
+                                try:
+                                    is_valid_duration = math.isfinite(duration_ms) and duration_ms >= 0
+                                except (TypeError, ValueError, OverflowError):
+                                    is_valid_duration = False
+
+                            if is_valid_duration:
+                                sess["recorded_turn_duration_seconds"] += duration_ms / 1000.0
+
+
+                        # Track credits if present. Skip duplicate completions
+                        # so a repeated ai_run_completed record cannot double-count
+                        # the operation's credits in the session summary.
                         creds = p.get("credits")
-                        if creds is not None and isinstance(creds, (int, float)):
+                        if (
+                            creds is not None
+                            and isinstance(creds, (int, float))
+                            and not is_duplicate_completion
+                        ):
                             sess["has_credit_data"] = True
                             sess["total_credits"] = round(sess["total_credits"] + float(creds), 4)
                             if not sess["credit_unit"]:
@@ -512,10 +567,11 @@ class JSONLEventStore(EventStore):
                                     sess["total_tokens"] += int(in_tok or 0) + int(cache_tok or 0) + int(out_tok or 0)
 
                         elif etype == "ai_run_completed":
-                            sess["completed_runs_count"] += 1
-                            if model:
-                                sess["models"].add(model)
-                                sess["completed_model_counts"][model] = sess["completed_model_counts"].get(model, 0) + 1
+                            if not is_duplicate_completion:
+                                sess["completed_runs_count"] += 1
+                                if model:
+                                    sess["models"].add(model)
+                                    sess["completed_model_counts"][model] = sess["completed_model_counts"].get(model, 0) + 1
 
                         elif etype == "ai_run_started":
                             sess["started_runs_count"] += 1
@@ -541,9 +597,28 @@ class JSONLEventStore(EventStore):
                 t1_str = s["last_activity_at"].replace("Z", "+00:00")
                 t0 = datetime.fromisoformat(t0_str)
                 t1 = datetime.fromisoformat(t1_str)
-                s["duration_seconds"] = round((t1 - t0).total_seconds(), 2)
-            except Exception:
-                s["duration_seconds"] = 0.0
+                activity_span_seconds = max(0.0, (t1 - t0).total_seconds())
+            except (AttributeError, TypeError, ValueError):
+                activity_span_seconds = 0.0
+
+            recorded_turn_seconds = s.get("recorded_turn_duration_seconds", 0.0)
+
+            s["session_activity_span_seconds"] = round(activity_span_seconds, 2)
+
+            # Duration means accumulated recorded AI operation time,
+            # not the elapsed wall-clock span of the session.
+            is_valid_recorded = False
+            if isinstance(recorded_turn_seconds, (int, float)) and not isinstance(recorded_turn_seconds, bool):
+                try:
+                    is_valid_recorded = math.isfinite(recorded_turn_seconds) and recorded_turn_seconds > 0
+                except (TypeError, ValueError, OverflowError):
+                    is_valid_recorded = False
+
+            s["duration_seconds"] = (
+                round(recorded_turn_seconds, 2)
+                if is_valid_recorded
+                else None
+            )
 
             # Determine primary run count per model:
             # 1. If SQLite generation records exist for a model, they represent exact, authoritative model runs.

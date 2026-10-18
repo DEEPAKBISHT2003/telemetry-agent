@@ -1,0 +1,175 @@
+{
+  "total_operations_count": 2148,
+  "total_measured_credits": 78.91036786334992,
+  "total_measured_credits_exact": "78.910367863349918447",
+  "total_session_scope_credits": 0.0,
+  "total_session_scope_credits_exact": "0",
+  "total_account_scope_credits": 0.0,
+  "total_account_scope_credits_exact": "0",
+  "by_provider": {
+    "antigravity": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 2014,
+      "unmeasured_count": 2014
+    },
+    "kiro_cli": {
+      "credits": 56.19956234212272,
+      "credits_exact": "56.199562342122720447",
+      "count": 20,
+      "unmeasured_count": 0
+    },
+    "kiro_ide": {
+      "credits": 22.710805521227197,
+      "credits_exact": "22.7108055212271980",
+      "count": 114,
+      "unmeasured_count": 110
+    }
+  },
+  "by_operation_type": {
+    "tool_triggered": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 2034
+    },
+    "query": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 55
+    },
+    "prompt": {
+      "credits": 78.91036786334992,
+      "credits_exact": "78.910367863349918447",
+      "count": 59
+    }
+  },
+  "by_trigger_type": {
+    "agent_spawned": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 2034
+    },
+    "user_initiated": {
+      "credits": 78.91036786334992,
+      "credits_exact": "78.910367863349918447",
+      "count": 114
+    }
+  },
+  "interactive_vs_automated": {
+    "interactive": {
+      "credits": 78.91036786334992,
+      "credits_exact": "78.910367863349918447",
+      "count": 114
+    },
+    "automated": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 2034
+    }
+  },
+  "subagent_expenditure": {
+    "credits": 0.0,
+    "credits_exact": "0",
+    "count": 2034
+  },
+  "failed_and_retried": {
+    "failed": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 0
+    },
+    "retried": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 0
+    },
+    "turns_with_retries_count": 3
+  },
+  "by_measurement_status": {
+    "unavailable": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 2124
+    },
+    "measured": {
+      "credits": 78.91036786334992,
+      "credits_exact": "78.910367863349918447",
+      "count": 24
+    }
+  },
+  "jira_attribution": {
+    "attributed_tickets": {
+      "SCRUM-1": {
+        "credits": 0.22815600796019905,
+        "credits_exact": "0.22815600796019904",
+        "count": 584,
+        "sessions_count": 5
+      },
+      "SCRUM-7": {
+        "credits": 0.0,
+        "credits_exact": "0",
+        "count": 89,
+        "sessions_count": 1
+      },
+      "SCRUM-2": {
+        "credits": 1.1362724385074625,
+        "credits_exact": "1.13627243850746261",
+        "count": 5,
+        "sessions_count": 3
+      }
+    },
+    "unassigned": {
+      "credits": 77.54593941688226,
+      "credits_exact": "77.545939416882256797",
+      "count": 1470
+    }
+  },
+  "by_model": {
+    "unknown": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 2069
+    },
+    "gemini-3.8-flash-medium": {
+      "credits": 0.0,
+      "credits_exact": "0",
+      "count": 55
+    },
+    "auto": {
+      "credits": 52.50329634776119,
+      "credits_exact": "52.50329634776119520",
+      "count": 15
+    },
+    "claude-sonnet-4.5": {
+      "credits": 0.7390691904145936,
+      "credits_exact": "0.7390691904145936",
+      "count": 2
+    },
+    "claude-haiku-4.5": {
+      "credits": 0.05095191223880598,
+      "credits_exact": "0.050951912238805977",
+      "count": 3
+    },
+    "glm-5": {
+      "credits": 0.15001598175787728,
+      "credits_exact": "0.15001598175787728",
+      "count": 1
+    },
+    "deepseek-3.2": {
+      "credits": 25.467034431177446,
+      "credits_exact": "25.46703443117744639",
+      "count": 3
+    }
+  },
+  "by_hook": {},
+  "reconciliation": {
+    "operation_sum_credits": 78.91036786334992,
+    "operation_sum_credits_exact": "78.910367863349918447",
+    "session_sum_credits": 0.0,
+    "session_sum_credits_exact": "0",
+    "latest_account_checkpoint_credits": null,
+    "latest_account_checkpoint_credits_exact": null,
+    "reconciliation_discrepancy": null,
+    "reconciliation_discrepancy_exact": null
+  }
+}

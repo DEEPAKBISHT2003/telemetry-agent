@@ -1,0 +1,282 @@
+test_01_normal_prompt_authoritative_credit (test_ai_credit_accounting.TestAICreditAccounting.test_01_normal_prompt_authoritative_credit) ... ok
+test_02_multiple_prompts_single_session (test_ai_credit_accounting.TestAICreditAccounting.test_02_multiple_prompts_single_session) ... ok
+test_03_manual_agent_hook (test_ai_credit_accounting.TestAICreditAccounting.test_03_manual_agent_hook) ... ok
+test_04_automatically_triggered_agent_hook (test_ai_credit_accounting.TestAICreditAccounting.test_04_automatically_triggered_agent_hook) ... ok
+test_05_scheduled_agent_hook_with_metadata (test_ai_credit_accounting.TestAICreditAccounting.test_05_scheduled_agent_hook_with_metadata) ... ok
+test_06_shell_only_hook_zero_credits (test_ai_credit_accounting.TestAICreditAccounting.test_06_shell_only_hook_zero_credits) ... ok
+test_07_unmeasurable_hook_credits (test_ai_credit_accounting.TestAICreditAccounting.test_07_unmeasurable_hook_credits) ... ok
+test_08_subagent_parent_correlation (test_ai_credit_accounting.TestAICreditAccounting.test_08_subagent_parent_correlation) ... ok
+test_09_failed_and_retried_operations (test_ai_credit_accounting.TestAICreditAccounting.test_09_failed_and_retried_operations) ... ok
+test_10_deduplication_and_idempotence (test_ai_credit_accounting.TestAICreditAccounting.test_10_deduplication_and_idempotence) ... ok
+test_11_session_totals_do_not_double_count_operations (test_ai_credit_accounting.TestAICreditAccounting.test_11_session_totals_do_not_double_count_operations) ... ok
+test_12_account_level_reconciliation_discrepancy (test_ai_credit_accounting.TestAICreditAccounting.test_12_account_level_reconciliation_discrepancy) ... ok
+test_13_missing_and_unknown_fields_preserved_as_none (test_ai_credit_accounting.TestAICreditAccounting.test_13_missing_and_unknown_fields_preserved_as_none) ... ok
+test_14_decimal_safe_precision_and_no_float_drift (test_ai_credit_accounting.TestAICreditAccounting.test_14_decimal_safe_precision_and_no_float_drift) ... ok
+test_15_corrupted_and_partial_writes_handling (test_ai_credit_accounting.TestAICreditAccounting.test_15_corrupted_and_partial_writes_handling) ... ok
+test_16_collector_restart_recovery (test_ai_credit_accounting.TestAICreditAccounting.test_16_collector_restart_recovery) ... ok
+test_17_jira_ticket_switching_half_open_split (test_ai_credit_accounting.TestAICreditAccounting.test_17_jira_ticket_switching_half_open_split) ... ok
+test_18_preservation_of_antigravity_tokens_and_kiro_functionality (test_ai_credit_accounting.TestAICreditAccounting.test_18_preservation_of_antigravity_tokens_and_kiro_functionality) ... ok
+test_19_kiro_ide_subagent_extraction_and_parent_linking (test_ai_credit_accounting.TestAICreditAccounting.test_19_kiro_ide_subagent_extraction_and_parent_linking) ... ok
+test_20_historical_event_backfill_and_deduplication (test_ai_credit_accounting.TestAICreditAccounting.test_20_historical_event_backfill_and_deduplication) ... ok
+test_21_kiro_cli_multi_request_not_labeled_retry (test_ai_credit_accounting.TestAICreditAccounting.test_21_kiro_cli_multi_request_not_labeled_retry) ... ok
+test_22_kiro_cli_retry_classification_exact_sessions (test_ai_credit_accounting.TestAICreditAccounting.test_22_kiro_cli_retry_classification_exact_sessions) ... ok
+test_23_accounting_store_query_filtering_after_normalization (test_ai_credit_accounting.TestAICreditAccounting.test_23_accounting_store_query_filtering_after_normalization) ... ok
+test_24_accounting_summary_new_json_fields_and_exact_dimensional_totals (test_ai_credit_accounting.TestAICreditAccounting.test_24_accounting_summary_new_json_fields_and_exact_dimensional_totals) ... ok
+test_25_cli_accounting_summary_coverage_labels_and_formatting (test_ai_credit_accounting.TestAICreditAccounting.test_25_cli_accounting_summary_coverage_labels_and_formatting) ... ok
+test_antigravity_mode_initializes_sqlite_source (test_antigravity_regression.TestAntigravityRegression.test_antigravity_mode_initializes_sqlite_source)
+In 'antigravity' mode, TelemetryCollector should instantiate AntigravitySource with SQLite provider. ... ok
+test_default_antigravity_status_preserved (test_antigravity_regression.TestAntigravityRegression.test_default_antigravity_status_preserved)
+Antigravity status constant should remain GEN_METADATA_LOCAL_SUPPORTED. ... ok
+test_global_hook_status_structure (test_antigravity_regression.TestAntigravityRegression.test_global_hook_status_structure)
+get_global_hook_status should return all expected dictionary keys without error. ... ok
+test_req12_explicit_unassigned_state (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req12_explicit_unassigned_state)
+Clearing the ticket explicitly marks work as UNASSIGNED. ... ok
+test_req3_working_on_main_with_existing_association (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req3_working_on_main_with_existing_association)
+Working on main with an existing PROJ-148 association must preserve it. ... ok
+test_req4_selecting_on_main_then_creating_branch (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req4_selecting_on_main_then_creating_branch)
+Selecting ticket on main, then creating feature/PROJ-148-login must keep the association. ... ok
+test_req5_switching_from_proj_148_to_proj_162 (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req5_switching_from_proj_148_to_proj_162)
+Explicitly switching from PROJ-148 to PROJ-162 closes previous and starts new association. ... ok
+test_req6_conflicting_branch_keys_require_confirmation (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req6_conflicting_branch_keys_require_confirmation)
+When active association is PROJ-148 and branch has PROJ-162, propose switch without silent overwrite. ... ok
+test_req7_persistence_across_collector_restart (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req7_persistence_across_collector_restart)
+Ticket association persists across collector restarts in isolated file. ... ok
+test_req9_separate_repositories_with_different_tickets (test_jira_attribution.TestAttributionStoreAndBranchRules.test_req9_separate_repositories_with_different_tickets)
+Repo A and Repo B maintain separate, independent active tickets. ... ok
+test_req10_no_git_or_subprocess_failure (test_jira_attribution.TestBranchDetection.test_req10_no_git_or_subprocess_failure)
+Degrade gracefully when git is unavailable, target is not a repo, or subprocess fails. ... ok
+test_req1_extraction_from_common_branch_naming (test_jira_attribution.TestBranchDetection.test_req1_extraction_from_common_branch_naming)
+Extract PROJ-148 from various branch naming conventions. ... ok
+test_req2_invalid_or_ambiguous_branch_keys (test_jira_attribution.TestBranchDetection.test_req2_invalid_or_ambiguous_branch_keys)
+Ambiguous (conflicting) or invalid branch names must be detected appropriately. ... ok
+test_generic_jira_rest_adapter_successful_resolution (test_jira_attribution.TestJiraApiAdapter.test_generic_jira_rest_adapter_successful_resolution)
+Mock successful read-only resolution of title and status. ... ok
+test_generic_jira_rest_adapter_unreachable_network_graceful (test_jira_attribution.TestJiraApiAdapter.test_generic_jira_rest_adapter_unreachable_network_graceful)
+When Jira base URL is configured but unreachable, return None without crashing. ... ok
+test_jira_cloud_basic_auth_header_construction (test_jira_attribution.TestJiraApiAdapter.test_jira_cloud_basic_auth_header_construction) ... ok
+test_jira_server_pat_auth_preserved (test_jira_attribution.TestJiraApiAdapter.test_jira_server_pat_auth_preserved) ... ok
+test_jira_username_setting_and_env_loading (test_jira_attribution.TestJiraApiAdapter.test_jira_username_setting_and_env_loading) ... ok
+test_normalize_jira_base_url (test_jira_attribution.TestJiraApiAdapter.test_normalize_jira_base_url) ... ok
+test_null_adapter_offline_mode (test_jira_attribution.TestJiraApiAdapter.test_null_adapter_offline_mode)
+NullJiraAdapter behaves safely offline. ... ok
+test_test_connection_diagnostics_errors (test_jira_attribution.TestJiraApiAdapter.test_test_connection_diagnostics_errors) ... ok
+test_test_connection_diagnostics_success (test_jira_attribution.TestJiraApiAdapter.test_test_connection_diagnostics_success) ... ok
+test_test_issue_diagnostics (test_jira_attribution.TestJiraApiAdapter.test_test_issue_diagnostics) ... ok
+test_cli_jira_preview_and_confirm (test_jira_attribution.TestJiraCliCommands.test_cli_jira_preview_and_confirm) ... ok
+test_cli_jira_select_and_status (test_jira_attribution.TestJiraCliCommands.test_cli_jira_select_and_status) ... ok
+test_cli_jira_summary_and_sessions (test_jira_attribution.TestJiraCliCommands.test_cli_jira_summary_and_sessions) ... ok
+test_cli_jira_test_connection_configured_and_json (test_jira_attribution.TestJiraCliCommands.test_cli_jira_test_connection_configured_and_json) ... ok
+test_cli_jira_test_connection_unconfigured (test_jira_attribution.TestJiraCliCommands.test_cli_jira_test_connection_unconfigured) ... ok
+test_confirm_branch_switch_validates_against_jira_rejects_404 (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_confirm_branch_switch_validates_against_jira_rejects_404)
+Confirming a proposed ticket switch also validates against Jira and rejects 404. ... ok
+test_confirm_offline_unconfigured_requires_allow_unverified (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_confirm_offline_unconfigured_requires_allow_unverified)
+When Jira is unconfigured, confirming a proposed branch switch requires --allow-unverified. ... ok
+test_select_auth_error_distinguished_and_requires_offline_policy (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_select_auth_error_distinguished_and_requires_offline_policy)
+Authentication failure (401/403) blocks selection unless --allow-unverified is passed. ... ok
+test_select_network_error_distinguished_and_requires_offline_policy (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_select_network_error_distinguished_and_requires_offline_policy)
+Network failure blocks selection unless --offline / --allow-unverified is passed. ... ok
+test_select_nonexistent_ticket_rejected_without_modifying_active_interval (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_select_nonexistent_ticket_rejected_without_modifying_active_interval)
+A verified HTTP 404 rejects selection without modifying active ticket or its attribution interval. ... ok
+test_select_offline_unconfigured_requires_allow_unverified (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_select_offline_unconfigured_requires_allow_unverified)
+When Jira is unconfigured, selection is rejected by default, requiring --allow-unverified or --offline. ... ok
+test_select_valid_ticket_verified_success (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_select_valid_ticket_verified_success)
+When Jira is configured and returns 200, ticket is verified and activated. ... ok
+test_separation_of_user_confirmation_and_jira_validation (test_jira_attribution.TestJiraValidationAndOfflinePolicy.test_separation_of_user_confirmation_and_jira_validation)
+User confirmation is tracked separately from Jira API existence validation. ... ok
+test_antigravity_token_events_without_credits (test_jira_attribution.TestUsageAttributionAndAggregation.test_antigravity_token_events_without_credits)
+5. Antigravity events that record tokens but no credits: ... ok
+test_duplicate_event_delivery_does_not_double_count_or_drop_runs (test_jira_attribution.TestUsageAttributionAndAggregation.test_duplicate_event_delivery_does_not_double_count_or_drop_runs)
+7. Duplicate event delivery handling without discarding legitimate runs. ... ok
+test_exact_switch_timestamp_belongs_to_new_ticket (test_jira_attribution.TestUsageAttributionAndAggregation.test_exact_switch_timestamp_belongs_to_new_ticket)
+3. Half-open intervals: An event with timestamp exactly at ticket switch ... ok
+test_missing_and_malformed_timestamps_handled_safely (test_jira_attribution.TestUsageAttributionAndAggregation.test_missing_and_malformed_timestamps_handled_safely)
+8. Missing timestamps and malformed timestamps: ... ok
+test_missing_credits_distinguished_from_measured_zero (test_jira_attribution.TestUsageAttributionAndAggregation.test_missing_credits_distinguished_from_measured_zero)
+9. Missing credits vs. measured zero credits: ... ok
+test_multi_session_multi_repository_exact_reconciliation (test_jira_attribution.TestUsageAttributionAndAggregation.test_multi_session_multi_repository_exact_reconciliation)
+6. Multiple sessions across multiple repositories reconciling exactly ... ok
+test_one_thousand_synthetic_events_exact_reconciliation (test_jira_attribution.TestUsageAttributionAndAggregation.test_one_thousand_synthetic_events_exact_reconciliation)
+10. 1,000 synthetic events spanning three attribution intervals ... ok
+test_req13_attribution_boundaries_no_retroactive_reassignment (test_jira_attribution.TestUsageAttributionAndAggregation.test_req13_attribution_boundaries_no_retroactive_reassignment)
+Historical usage prior to ticket selection is not retroactively reassigned. ... ok
+test_req15_unknown_token_counts_remain_unknown (test_jira_attribution.TestUsageAttributionAndAggregation.test_req15_unknown_token_counts_remain_unknown)
+When tokens are unreported (None), token fields in summary remain None (not 0). ... ok
+test_req16_historical_telemetry_remains_readable (test_jira_attribution.TestUsageAttributionAndAggregation.test_req16_historical_telemetry_remains_readable)
+Historical events recorded without jira_task_id or attribution files load cleanly. ... ok
+test_req8_and_14_multiple_kiro_sessions_and_no_double_counting (test_jira_attribution.TestUsageAttributionAndAggregation.test_req8_and_14_multiple_kiro_sessions_and_no_double_counting)
+Multiple sessions in same repository and working context attributed without double counting. ... ok
+test_run_counting_no_double_counting_start_and_completion (test_jira_attribution.TestUsageAttributionAndAggregation.test_run_counting_no_double_counting_start_and_completion)
+4. Sessions with both ai_run_started and ai_run_completed: ... ok
+test_session_spanning_attribution_boundary_exact_split (test_jira_attribution.TestUsageAttributionAndAggregation.test_session_spanning_attribution_boundary_exact_split)
+1. A session spanning multiple attribution intervals: ... ok
+test_session_spanning_before_ticket_selection_remains_unassigned (test_jira_attribution.TestUsageAttributionAndAggregation.test_session_spanning_before_ticket_selection_remains_unassigned)
+2. A session spanning a boundary where events before ticket selection ... ok
+test_auto_model_mapping (test_kiro_cli_source.TestKiroCLISessionSource.test_auto_model_mapping)
+When selected_model is 'auto', selected_model is 'auto' and resolved_model is None. ... ok
+test_corrupted_json_handled_resiliently (test_kiro_cli_source.TestKiroCLISessionSource.test_corrupted_json_handled_resiliently)
+Corrupted or partially written JSON files should not crash the source. ... ok
+test_deduplication_via_cursor (test_kiro_cli_source.TestKiroCLISessionSource.test_deduplication_via_cursor)
+Subsequent polls without new turns should produce 0 events. ... ok
+test_parses_turn_with_credits_and_zero_tokens_mapped_to_none (test_kiro_cli_source.TestKiroCLISessionSource.test_parses_turn_with_credits_and_zero_tokens_mapped_to_none)
+Zero token counts must be mapped to None, and meteringUsage mapped to credits. ... ok
+test_hook_handler_processes_stdin_without_stdout_or_failure (test_kiro_hooks.TestKiroHooks.test_hook_handler_processes_stdin_without_stdout_or_failure)
+Kiro hook handler must read stdin, write to store, and exit 0 without stdout pollution. ... ok
+test_installer_is_idempotent_and_preserves_other_hooks (test_kiro_hooks.TestKiroHooks.test_installer_is_idempotent_and_preserves_other_hooks)
+Installing Kiro hooks should create valid config and be idempotent. ... ok
+test_session_end_emits_run_completed (test_kiro_hooks.TestKiroHooks.test_session_end_emits_run_completed)
+Kiro hook handler must map SessionEnd to ai_run_completed event. ... ok
+test_stop_and_session_end_deduplication (test_kiro_hooks.TestKiroHooks.test_stop_and_session_end_deduplication)
+Firing both Stop and SessionEnd for the same session must emit exactly one run_completed event. ... ok
+test_uninstaller_removes_cleanly (test_kiro_hooks.TestKiroHooks.test_uninstaller_removes_cleanly)
+Uninstalling Kiro hooks should cleanly remove them while creating a backup. ... ok
+test_line_offset_tracking (test_kiro_ide_source.TestKiroIDESessionSource.test_line_offset_tracking)
+Second poll without appending lines should yield zero new messages. ... ok
+test_parses_ide_session_and_messages (test_kiro_ide_source.TestKiroIDESessionSource.test_parses_ide_session_and_messages)
+Kiro IDE session.json and messages.jsonl should be parsed into structured telemetry events. ... ok
+test_completion_credits_not_double_counted_across_event_types (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_completion_credits_not_double_counted_across_event_types)
+The completion's credits must be counted exactly once even when the ... ok
+test_ide_completion_measured_credits_unreported_tokens (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_ide_completion_measured_credits_unreported_tokens)
+A completion with measured credits and unreported token counts must be ... ok
+test_ide_context_usage_not_an_accounting_operation (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_ide_context_usage_not_an_accounting_operation)
+An IDE context-usage metadata update must not be misclassified as an ... ok
+test_ide_prompt_missing_credits_is_unmeasured (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_ide_prompt_missing_credits_is_unmeasured)
+An IDE completion with no credit value remains explicitly unmeasured ... ok
+test_ide_subagent_unmeasured_preserved (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_ide_subagent_unmeasured_preserved)
+Subagent lifecycle events are retained as legitimate unmeasured ... ok
+test_ide_tool_call_not_an_accounting_operation (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_ide_tool_call_not_an_accounting_operation)
+An IDE tool call with missing credit information must not become a ... ok
+test_ide_turn_yields_two_operations_not_four (test_kiro_ide_telemetry_remediation.TestAccountingCoverage.test_ide_turn_yields_two_operations_not_four)
+A single IDE turn emits tool_call, contextUsage, completion, and ... ok
+test_antigravity_accounting_preserved (test_kiro_ide_telemetry_remediation.TestHistoricalAndRegression.test_antigravity_accounting_preserved)
+Regression: Antigravity SQLite generation events still produce a token-metered ... ok
+test_historical_record_missing_duration_fields (test_kiro_ide_telemetry_remediation.TestHistoricalAndRegression.test_historical_record_missing_duration_fields)
+A historical completion with no duration_ms must yield duration_seconds=None ... ok
+test_historical_record_partial_fields_no_crash (test_kiro_ide_telemetry_remediation.TestHistoricalAndRegression.test_historical_record_partial_fields_no_crash)
+A historical record with only a subset of fields must not crash get_sessions. ... ok
+test_jira_attribution_engagement_uses_activity_span (test_kiro_ide_telemetry_remediation.TestHistoricalAndRegression.test_jira_attribution_engagement_uses_activity_span)
+Regression: Jira ticket engagement must use the session activity span, not ... ok
+test_kiro_cli_credit_accounting_preserved (test_kiro_ide_telemetry_remediation.TestHistoricalAndRegression.test_kiro_cli_credit_accounting_preserved)
+Regression: CLI metering_usage credits remain MEASURED in the accounting ledger. ... ok
+test_kiro_cli_duration_metadata_fallback_preserved (test_kiro_ide_telemetry_remediation.TestHistoricalAndRegression.test_kiro_cli_duration_metadata_fallback_preserved)
+Regression: CLI duration must use metadata.turn_duration_ms then fall back ... ok
+test_cli_source_auto_model_unresolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_cli_source_auto_model_unresolved)
+CLI turn with selected_model='auto' yields selected_model='auto', resolved_model=None. ... ERROR
+test_cli_source_routing_alias_not_resolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_cli_source_routing_alias_not_resolved)
+CLI turn with a non-'auto' routing alias (simple-task) yields resolved_model=None. ... ERROR
+test_converter_normalizes_historical_alias_resolved_model (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_converter_normalizes_historical_alias_resolved_model)
+A historical record carrying resolved_model='simple-task' is normalized ... ok
+test_ide_source_auto_model_unresolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_ide_source_auto_model_unresolved)
+IDE session.json with modelId='auto' yields selected_model='auto', ... ok
+test_ide_source_concrete_model_resolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_ide_source_concrete_model_resolved)
+When modelId is a concrete model identifier, it is preserved as resolved_model. ... ok
+test_ide_source_routing_alias_not_resolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_ide_source_routing_alias_not_resolved)
+A non-'auto' routing alias (simple-task) must also yield resolved_model=None ... ok
+test_routing_alias_detection (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_routing_alias_detection) ... ok
+test_completed_operation_with_authoritative_duration (test_kiro_ide_telemetry_remediation.TestSessionDurationSeparation.test_completed_operation_with_authoritative_duration)
+recorded_turn_duration_seconds must capture the IDE operation duration. ... ok
+test_duplicate_completion_events_do_not_double_count (test_kiro_ide_telemetry_remediation.TestSessionDurationSeparation.test_duplicate_completion_events_do_not_double_count)
+Duplicate ai_run_completed records (same run_id) must not inflate ... ok
+test_long_lived_session_short_operation_duration_not_activity_span (test_kiro_ide_telemetry_remediation.TestSessionDurationSeparation.test_long_lived_session_short_operation_duration_not_activity_span)
+A long-lived IDE session with a short completed operation must report ... ok
+test_multiple_completed_operations_sum_durations (test_kiro_ide_telemetry_remediation.TestSessionDurationSeparation.test_multiple_completed_operations_sum_durations)
+Multiple completed operations in one session sum their validated durations. ... ok
+test_operation_with_unknown_duration (test_kiro_ide_telemetry_remediation.TestSessionDurationSeparation.test_operation_with_unknown_duration)
+When duration_ms is unavailable, duration_seconds must be None (unknown), ... ok
+test_antigravity_events_labeled_antigravity (test_kiro_ide_telemetry_remediation.TestSourceAttribution.test_antigravity_events_labeled_antigravity)
+Antigravity SQLite generation events must remain labeled 'antigravity'. ... ok
+test_events_command_source_filter (test_kiro_ide_telemetry_remediation.TestSourceAttribution.test_events_command_source_filter)
+The events CLI --source filter must correctly partition Kiro IDE vs ... ok
+test_git_and_system_labels_preserved (test_kiro_ide_telemetry_remediation.TestSourceAttribution.test_git_and_system_labels_preserved) ... ok
+test_kiro_cli_session_file_events_labeled_kiro (test_kiro_ide_telemetry_remediation.TestSourceAttribution.test_kiro_cli_session_file_events_labeled_kiro)
+CLI session-file events (capture_method=session_json) must display as 'kiro'. ... ok
+test_kiro_ide_session_file_events_labeled_kiro (test_kiro_ide_telemetry_remediation.TestSourceAttribution.test_kiro_ide_session_file_events_labeled_kiro)
+IDE session-file events (capture_method=messages_jsonl) must display as ... ok
+test_auto_mode_both_cli_and_ide_present (test_kiro_remediations.TestKiroAutoModeAndPathResolution.test_auto_mode_both_cli_and_ide_present)
+Case 1: Both CLI and IDE directories present. Both sources must collect concurrently. ... ok
+test_auto_mode_cli_present_ide_absent (test_kiro_remediations.TestKiroAutoModeAndPathResolution.test_auto_mode_cli_present_ide_absent)
+Case 2: CLI directory present but IDE sessions absent. CLI events collected without IDE failure. ... ok
+test_auto_mode_ide_present_cli_absent (test_kiro_remediations.TestKiroAutoModeAndPathResolution.test_auto_mode_ide_present_cli_absent)
+Case 3: IDE sessions present but CLI directory absent. IDE events collected without creating cli/. ... ok
+test_auto_mode_neither_kiro_directory_exists (test_kiro_remediations.TestKiroAutoModeAndPathResolution.test_auto_mode_neither_kiro_directory_exists)
+Case 4: Neither Kiro source directory exists. Antigravity fallback source is included. ... ok
+test_auto_mode_new_cli_directory_appears_after_init (test_kiro_remediations.TestKiroAutoModeAndPathResolution.test_auto_mode_new_cli_directory_appears_after_init)
+Case 5: A new CLI directory appears after collector initialization. Reader must ingest sessions. ... ok
+test_cli_path_resolution_does_not_scan_parent_or_precreate_child (test_kiro_remediations.TestKiroAutoModeAndPathResolution.test_cli_path_resolution_does_not_scan_parent_or_precreate_child)
+Regression test for Finding 2: CLI source always targets cli/ child and never parent. ... ok
+test_kiro_cli_rollback_on_persistence_failure_re_polls_cleanly (test_kiro_remediations.TestKiroRollbackState.test_kiro_cli_rollback_on_persistence_failure_re_polls_cleanly)
+Simulate storage failure in CLI source; verify rollback and subsequent clean ingestion without duplicate credits. ... ok
+test_kiro_ide_rollback_on_persistence_failure_re_polls_cleanly (test_kiro_remediations.TestKiroRollbackState.test_kiro_ide_rollback_on_persistence_failure_re_polls_cleanly)
+Simulate storage failure in IDE source; verify rollback and subsequent clean ingestion. ... ok
+test_check_process_liveness_current_process (test_process_liveness.TestProcessLiveness.test_check_process_liveness_current_process)
+Current process PID must be detected as alive. ... ok
+test_check_process_liveness_invalid_pids (test_process_liveness.TestProcessLiveness.test_check_process_liveness_invalid_pids)
+Negative, zero, and impossibly high PIDs must return False. ... ok
+test_cmd_stop_handles_stale_pid_safely (test_process_liveness.TestProcessLiveness.test_cmd_stop_handles_stale_pid_safely)
+cmd_stop must remove stale PID file without throwing or terminating unrelated processes. ... ok
+test_get_collector_status_corrupted_pid_file (test_process_liveness.TestProcessLiveness.test_get_collector_status_corrupted_pid_file)
+When PID file contains non-integer garbage, it is cleaned up safely. ... ok
+test_get_collector_status_live_process (test_process_liveness.TestProcessLiveness.test_get_collector_status_live_process)
+When PID file has current process PID, status is (True, pid) and file is kept. ... ok
+test_get_collector_status_no_file (test_process_liveness.TestProcessLiveness.test_get_collector_status_no_file)
+When no PID file exists, status is (False, None). ... ok
+test_get_collector_status_stale_pid_cleanup (test_process_liveness.TestProcessLiveness.test_get_collector_status_stale_pid_cleanup)
+When PID file has dead PID, status is (False, None) and stale file is deleted. ... ok
+test_cli_parser_start_source_argument (test_process_liveness.TestSourceSelection.test_cli_parser_start_source_argument)
+The start CLI command must accept --source {antigravity,kiro_cli,kiro_ide,auto}. ... ok
+test_collector_registers_antigravity_when_default (test_process_liveness.TestSourceSelection.test_collector_registers_antigravity_when_default)
+When telemetry_source is antigravity, AntigravitySource is in active sources. ... ok
+test_collector_registers_kiro_cli_when_configured (test_process_liveness.TestSourceSelection.test_collector_registers_kiro_cli_when_configured)
+When telemetry_source is kiro_cli, KiroCLISessionSource is in active sources. ... ok
+test_extract_telemetry_source_from_cmdline (test_process_liveness.TestSourceSelection.test_extract_telemetry_source_from_cmdline)
+extract_telemetry_source_from_cmdline correctly extracts all supported source values. ... ok
+test_kiro_cli_jira_attribution_e2e (test_process_liveness.TestSourceSelection.test_kiro_cli_jira_attribution_e2e)
+End-to-end verification: Kiro CLI session is ingested, attributed to SCRUM-1, and summarized accurately. ... ok
+test_status_reports_effective_source_from_running_collector (test_process_liveness.TestSourceSelection.test_status_reports_effective_source_from_running_collector)
+cmd_status reports the running collector's effective source (e.g. kiro_cli) even when global config defaults to antigravity. ... ok
+test_status_resolves_effective_source_from_process_cmdline_fallback (test_process_liveness.TestSourceSelection.test_status_resolves_effective_source_from_process_cmdline_fallback)
+When collector_meta.json is missing but process is running with --source kiro_cli, cmd_status extracts source from cmdline. ... ok
+test_default_telemetry_source (test_settings.TestSettingsValidation.test_default_telemetry_source)
+Default telemetry source should be 'antigravity' for backward compatibility. ... ok
+test_invalid_telemetry_source_raises (test_settings.TestSettingsValidation.test_invalid_telemetry_source_raises)
+Invalid source values must raise a ConfigurationError with clear context. ... ok
+test_kiro_monitor_enabled_boolean_parsing (test_settings.TestSettingsValidation.test_kiro_monitor_enabled_boolean_parsing)
+KIRO_MONITOR_ENABLED should parse truthy and falsy values correctly. ... ok
+test_kiro_sessions_dir_override (test_settings.TestSettingsValidation.test_kiro_sessions_dir_override)
+KIRO_SESSIONS_DIR environment variable and .env override should take effect. ... ok
+test_valid_telemetry_sources (test_settings.TestSettingsValidation.test_valid_telemetry_sources)
+All documented sources ('antigravity', 'kiro_ide', 'kiro_cli', 'auto') should be accepted. ... ok
+
+======================================================================
+ERROR: test_cli_source_auto_model_unresolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_cli_source_auto_model_unresolved)
+CLI turn with selected_model='auto' yields selected_model='auto', resolved_model=None.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\Ankit Kumar\Desktop\telemetry-agent\tests\test_kiro_ide_telemetry_remediation.py", line 552, in test_cli_source_auto_model_unresolved
+    (sessions_dir / f"{sid}.json").write_text(json.dumps({
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1047, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\ANKITK~1\\AppData\\Local\\Temp\\telemetry_model_cli_auto_zek4o45x\\cli\\cli-auto.json'
+
+======================================================================
+ERROR: test_cli_source_routing_alias_not_resolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_cli_source_routing_alias_not_resolved)
+CLI turn with a non-'auto' routing alias (simple-task) yields resolved_model=None.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\Ankit Kumar\Desktop\telemetry-agent\tests\test_kiro_ide_telemetry_remediation.py", line 580, in test_cli_source_routing_alias_not_resolved
+    (sessions_dir / f"{sid}.json").write_text(json.dumps({
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1047, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\ANKITK~1\\AppData\\Local\\Temp\\telemetry_model_cli_alias_exrps6me\\cli\\cli-alias.json'
+
+----------------------------------------------------------------------
+Ran 143 tests in 42.855s
+
+FAILED (errors=2)

@@ -38,6 +38,7 @@ class EventType:
     AGENT_STARTED = "agent_started"
     AGENT_COMPLETED = "agent_completed"
     ANTIGRAVITY_DETECTED = "antigravity_detected"
+    AI_OPERATION = "ai_operation"
     KIRO_DETECTED = "kiro_detected"
 
     @classmethod
@@ -50,8 +51,34 @@ class EventType:
             cls.AI_RUN_STARTED, cls.AI_RUN_COMPLETED, cls.AI_RUN_FAILED,
             cls.AI_TURN, cls.AI_TOOL_CALL, cls.TOOL_CALL,
             cls.AGENT_STARTED, cls.AGENT_COMPLETED, cls.ANTIGRAVITY_DETECTED,
-            cls.KIRO_DETECTED,
+            cls.KIRO_DETECTED, cls.AI_OPERATION,
         }
+
+
+# Kiro model routing aliases. These values record the model *selection mode*
+# used for a session/turn, not a resolved concrete model. Kiro resolves the
+# actual backend model server-side and does not persist the resolved identity
+# locally (confirmed across session.json, messages.jsonl, and hook payloads).
+# They must be preserved as the *selected* model but never reported as the
+# *resolved* model.
+_KIRO_ROUTING_ALIAS_VALUES = {"auto", "simple-task", "qdev::auto"}
+
+
+def is_kiro_routing_alias(model: Optional[str]) -> bool:
+    """Return True if ``model`` is a Kiro routing alias rather than a concrete model.
+
+    Kiro records the selection mode (e.g. ``auto``, ``simple-task``, ``qdev::auto``)
+    in its local files; the resolved model is chosen server-side and is not
+    available locally. Such values are kept as the *selected* model but must
+    never be labeled as the *resolved* model.
+    """
+    if not model or not isinstance(model, str):
+        return False
+    normalized = model.strip().lower()
+    if normalized in _KIRO_ROUTING_ALIAS_VALUES:
+        return True
+    # The ``qdev::`` namespace is a routing prefix (e.g. ``qdev::auto``), not a model.
+    return normalized.startswith("qdev::")
 
 
 @dataclass

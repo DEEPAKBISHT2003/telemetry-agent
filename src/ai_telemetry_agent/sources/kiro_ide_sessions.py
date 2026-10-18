@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from ai_telemetry_agent.core.event import EventType
+from ai_telemetry_agent.core.event import EventType, is_kiro_routing_alias
 from ai_telemetry_agent.core.repository import detect_repository_context
 from ai_telemetry_agent.logging.structured import get_logger, sanitize_data
 from ai_telemetry_agent.sources.ai_provider import AIEventBuilder
@@ -216,8 +216,10 @@ class KiroIDESessionSource(EventSource):
         events: List[Dict[str, Any]] = []
 
         # Model resolution
+        # `modelId` records the model selection mode (e.g. "auto"); the resolved
+        # backend model is chosen server-side and is not persisted locally.
         selected_model = raw_model
-        resolved_model = raw_model if raw_model != "auto" else None
+        resolved_model = None if is_kiro_routing_alias(raw_model) else raw_model
 
         # Emit session started if not yet emitted
         if not sess_state.get("started_emitted", False):
@@ -301,6 +303,7 @@ class KiroIDESessionSource(EventSource):
             }
             return AIEventBuilder.build_tool_call(
                 tool_name=tool_name,
+                provider="kiro_ide",
                 session_id=session_id,
                 run_id=tool_call_id,
                 capture_method="messages_jsonl",
@@ -383,5 +386,42 @@ class KiroIDESessionSource(EventSource):
                 resolved_model=resolved_model,
                 metadata={"status": status, "token_status": "unreported_by_backend"},
             )
+
+        # 4. Sub-Agent Lifecycle Events
+        if msg_type in ("sub_agent_start", "sub_agent_complete"):
+            sub_id = payload.get("subSessionId") or entry.get("id")
+            parent_exec_id = payload.get("parentExecutionId")
+            sub_agent_name = payload.get("subAgentName") or "sub_agent"
+            is_start = msg_type == "sub_agent_start"
+            ev_type = EventType.AGENT_STARTED if is_start else EventType.AGENT_COMPLETED
+
+            clean_meta = {
+                "sub_agent_id": sub_id,
+                "parent_execution_id": parent_exec_id,
+                "sub_agent_name": sub_agent_name,
+                "is_subagent": True,
+                "lifecycle_action": msg_type,
+            }
+
+            return {
+                "event_type": ev_type,
+                "timestamp": timestamp,
+                "context": {
+                    "session_id": sub_id,
+                    "repository": repo_dict,
+                } if repo_dict else {"session_id": sub_id},
+                "payload": {
+                    "provider": "kiro_ide",
+                    "session_id": sub_id,
+                    "parent_session_id": session_id,
+                    "run_id": f"{session_id}_sub_{sub_id}",
+                    "agent_name": sub_agent_name,
+                    "capture_method": "messages_jsonl",
+                    # Subagent credits are bundled in parent turn's usage_summary;
+                    # Child operation must NOT fabricate credits or double-count.
+                    "credits": None,
+                    "metadata": clean_meta,
+                },
+            }
 
         return None

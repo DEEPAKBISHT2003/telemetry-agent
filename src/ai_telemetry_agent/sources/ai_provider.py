@@ -189,6 +189,7 @@ class AIEventBuilder:
     @staticmethod
     def build_tool_call(
         tool_name: str,
+        provider: Optional[str] = None,
         session_id: Optional[str] = None,
         run_id: Optional[str] = None,
         duration_ms: Optional[float] = None,
@@ -197,6 +198,7 @@ class AIEventBuilder:
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload = AITelemetryPayload(
+            provider=provider,
             session_id=session_id,
             run_id=run_id,
             tool_name=tool_name,

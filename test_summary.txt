@@ -1,0 +1,30 @@
+success=False
+testsRun=143
+failures=0
+errors=2
+
+=== test_cli_source_auto_model_unresolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_cli_source_auto_model_unresolved) ===
+Traceback (most recent call last):
+  File "C:\Users\Ankit Kumar\Desktop\telemetry-agent\tests\test_kiro_ide_telemetry_remediation.py", line 552, in test_cli_source_auto_model_unresolved
+    (sessions_dir / f"{sid}.json").write_text(json.dumps({
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1047, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\ANKITK~1\\AppData\\Local\\Temp\\telemetry_model_cli_auto_zek4o45x\\cli\\cli-auto.json'
+
+
+=== test_cli_source_routing_alias_not_resolved (test_kiro_ide_telemetry_remediation.TestModelIdentification.test_cli_source_routing_alias_not_resolved) ===
+Traceback (most recent call last):
+  File "C:\Users\Ankit Kumar\Desktop\telemetry-agent\tests\test_kiro_ide_telemetry_remediation.py", line 580, in test_cli_source_routing_alias_not_resolved
+    (sessions_dir / f"{sid}.json").write_text(json.dumps({
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1047, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Ankit Kumar\AppData\Local\Programs\Python\Python312\Lib\pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\ANKITK~1\\AppData\\Local\\Temp\\telemetry_model_cli_alias_exrps6me\\cli\\cli-alias.json'
+

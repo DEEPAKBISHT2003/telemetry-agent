@@ -1,0 +1,10 @@
+{
+  "operation_sum_credits": 78.91036786334992,
+  "operation_sum_credits_exact": "78.910367863349918447",
+  "session_sum_credits": 0.0,
+  "session_sum_credits_exact": "0",
+  "latest_account_checkpoint_credits": null,
+  "latest_account_checkpoint_credits_exact": null,
+  "reconciliation_discrepancy": null,
+  "reconciliation_discrepancy_exact": null
+}

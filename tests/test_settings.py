@@ -54,7 +54,8 @@ class TestSettingsValidation(unittest.TestCase):
         )
         settings = load_settings(env_file=str(self.env_file))
         self.assertEqual(settings.telemetry_source, "kiro_cli")
-        self.assertEqual(str(settings.kiro_sessions_dir), str(custom_dir.resolve()))
+        self.assertIsNotNone(settings.kiro_sessions_dir)
+        self.assertEqual(Path(settings.kiro_sessions_dir).resolve(), custom_dir.resolve())
 
     def test_kiro_monitor_enabled_boolean_parsing(self):
         """KIRO_MONITOR_ENABLED should parse truthy and falsy values correctly."""

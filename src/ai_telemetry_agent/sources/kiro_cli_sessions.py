@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from ai_telemetry_agent.core.event import EventType
+from ai_telemetry_agent.core.event import EventType, is_kiro_routing_alias
 from ai_telemetry_agent.core.repository import detect_repository_context
 from ai_telemetry_agent.logging.structured import get_logger, sanitize_data
 from ai_telemetry_agent.sources.ai_provider import AIEventBuilder
@@ -243,10 +243,10 @@ class KiroCLISessionSource(EventSource):
 
             # Model extraction and normalization
             raw_model = raw_turn.get("selected_model") or raw_turn.get("model") or turn.get("model")
-            if raw_model == "auto":
-                selected_model = "auto"
-                resolved_model = None  # Never label auto as resolved
-                display_model = "auto"
+            if is_kiro_routing_alias(raw_model):
+                selected_model = raw_model  # Preserve the routing alias as the selection
+                resolved_model = None  # Never label a routing alias as a resolved model
+                display_model = raw_model
             else:
                 selected_model = raw_model
                 resolved_model = raw_model
@@ -320,6 +320,7 @@ class KiroCLISessionSource(EventSource):
                 "builtin_tool_uses": turn.get("builtin_tool_uses"),
                 "assistant_response_length": turn.get("assistant_response_length"),
                 "user_prompt_length": turn.get("user_prompt_length"),
+                "turn_duration_ms": duration_ms,
                 "raw_token_diagnostics": raw_tokens_diag,
             }
 

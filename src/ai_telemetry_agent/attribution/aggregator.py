@@ -203,8 +203,16 @@ class TicketAggregator:
                     elif isinstance(in_tok, (int, float)) or isinstance(out_tok, (int, float)):
                         summary.total_tokens = (summary.total_tokens or 0) + int(in_tok or 0) + int(cache_tok or 0) + int(out_tok or 0)
 
-            # Record session engagement for each ticket that saw events in this session
-            sess_duration = float(s_meta.get("duration_seconds", 0.0))
+            # Record session engagement for each ticket that saw events in this session.
+            # Ticket engagement uses the session's wall-clock activity span
+            # (first-to-last event), which reflects how long the developer was
+            # engaged with the session -- NOT the validated AI operation
+            # duration. Falls back to operation duration, then 0, for sessions
+            # where the activity span is unavailable.
+            sess_duration_raw = s_meta.get("session_activity_span_seconds")
+            if sess_duration_raw is None:
+                sess_duration_raw = s_meta.get("duration_seconds")
+            sess_duration = float(sess_duration_raw) if sess_duration_raw is not None else 0.0
             # If session engaged multiple tickets, distribute duration equally across tickets
             dur_per_ticket = round(sess_duration / len(session_ticket_groups), 2) if session_ticket_groups else 0.0
 
