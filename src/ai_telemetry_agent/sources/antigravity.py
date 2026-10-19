@@ -34,6 +34,7 @@ class AntigravitySource(EventSource):
         enabled: bool = True,
         conversations_dirs: Optional[List[Any]] = None,
         state_file: Optional[Any] = None,
+        sync_historical: Optional[bool] = None,
     ):
         self.enabled = enabled
         self._started = False
@@ -45,6 +46,7 @@ class AntigravitySource(EventSource):
         self.sqlite_provider = SQLiteTokenProvider(
             conversations_dirs=conversations_dirs,
             state_file=state_file,
+            sync_historical=sync_historical,
         )
 
     @property

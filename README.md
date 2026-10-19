@@ -162,7 +162,7 @@ Developer Name     : Rahul Sharma
 Configured Member  : M001
 Configured Device  : DEV-001
 Hostname           : WORKSTATION-01
-Collector Version  : 0.1.2
+Collector Version  : 0.1.4
 Storage Directory  : C:\Users\Username\.telemetry_agent\data
 Storage Format     : Date-based JSONL (telemetry-YYYY-MM-DD.jsonl)
 Antigravity Status : GEN_METADATA_LOCAL_SUPPORTED

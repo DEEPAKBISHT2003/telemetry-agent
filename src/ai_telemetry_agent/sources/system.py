@@ -16,7 +16,7 @@ class SystemSource(EventSource):
 
     def __init__(
         self,
-        collector_version: str = "0.1.2",
+        collector_version: str = "0.1.4",
         heartbeat_interval_seconds: int = 30,
         member_id: str = "UNKNOWN",
         device_id: str = "UNKNOWN",

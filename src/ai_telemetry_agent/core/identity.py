@@ -85,6 +85,51 @@ def detect_hostname() -> str:
     return "localhost"
 
 
+def resolve_git_developer_name(cwd: Optional[Path] = None) -> str:
+    """Resolve developer name using Git configuration precedence:
+    1. Git repository local user.name
+    2. Git global user.name
+    3. Fallback: exact string 'team member'
+    """
+    import subprocess
+
+    # 1. Check git repository local user.name
+    try:
+        res = subprocess.run(
+            ["git", "config", "--local", "user.name"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            cwd=str(cwd) if cwd else None,
+            check=False,
+        )
+        if res.returncode == 0:
+            val = res.stdout.strip()
+            if val:
+                return val
+    except Exception:
+        pass
+
+    # 2. Check git global user.name
+    try:
+        res = subprocess.run(
+            ["git", "config", "--global", "user.name"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if res.returncode == 0:
+            val = res.stdout.strip()
+            if val:
+                return val
+    except Exception:
+        pass
+
+    # 3. Exact fallback identity
+    return "team member"
+
+
 def detect_os_username() -> Optional[str]:
     """Detect current OS username for local metadata attribution."""
     os_user = os.environ.get("USERNAME") or os.environ.get("USER")

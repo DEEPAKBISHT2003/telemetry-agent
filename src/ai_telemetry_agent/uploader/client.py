@@ -139,7 +139,7 @@ class BackendClient:
         url = f"{self.server_url}{path}"
         req_headers = {
             "Accept": "application/json",
-            "User-Agent": "ai-telemetry-agent/0.1.2",
+            "User-Agent": "ai-telemetry-agent/0.1.4",
         }
         if headers:
             req_headers.update(headers)
@@ -211,7 +211,7 @@ class BackendClient:
         hardware_uuid: str,
         hostname: str,
         platform_name: str,
-        agent_version: str = "0.1.2",
+        agent_version: str = "0.1.4",
     ) -> Dict[str, Any]:
         """Claim a single-use enrollment token and register this device workstation."""
         payload = {

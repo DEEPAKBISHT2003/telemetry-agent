@@ -42,15 +42,17 @@ class AntigravityCapabilityProbe:
     def probe(self) -> AntigravityCapabilities:
         gemini_dir = self.user_home / ".gemini"
         ide_dir = gemini_dir / "antigravity-ide"
+        cli_dir = gemini_dir / "antigravity-cli"
         config_dir = gemini_dir / "config"
 
         antigravity_detected = gemini_dir.is_dir()
-        ide_detected = ide_dir.is_dir()
+        ide_detected = ide_dir.is_dir() or cli_dir.is_dir()
 
         # Check MCP availability (mcp_config.json in global config or ide root)
         mcp_paths = [
             config_dir / "mcp_config.json",
             ide_dir / "mcp_config.json",
+            cli_dir / "mcp_config.json",
             self.workspace_root / ".agents" / "mcp_config.json",
         ]
         found_mcp_path = None
@@ -85,6 +87,12 @@ class AntigravityCapabilityProbe:
         token_metrics_available = False
         cost_metrics_available = False
 
+        resolved_ide_root = None
+        if ide_dir.is_dir():
+            resolved_ide_root = str(ide_dir)
+        elif cli_dir.is_dir():
+            resolved_ide_root = str(cli_dir)
+
         return AntigravityCapabilities(
             antigravity_detected=antigravity_detected,
             ide_detected=ide_detected,
@@ -97,7 +105,7 @@ class AntigravityCapabilityProbe:
             tool_events_available=tool_events_available,
             session_events_available=session_events_available,
             gemini_root=str(gemini_dir) if antigravity_detected else None,
-            ide_root=str(ide_dir) if ide_detected else None,
+            ide_root=resolved_ide_root,
             mcp_config_path=found_mcp_path,
             hooks_config_path=found_hooks_path,
         )

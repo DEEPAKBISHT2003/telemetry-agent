@@ -39,6 +39,7 @@ from ai_telemetry_agent.core.identity import (
     enroll,
     get_identity,
     is_enrolled,
+    resolve_git_developer_name,
 )
 from ai_telemetry_agent.integrations.hooks.installer import (
     get_global_hook_status,
@@ -84,103 +85,310 @@ def _get_active_store(settings: Optional[Settings] = None) -> EventStore:
 
 
 def cmd_install(args: argparse.Namespace) -> None:
-    """Setup, enroll, and initialize telemetry collection on the local machine."""
-    user_home = get_user_agent_home()
+    """Setup, enroll, and configure AI telemetry collection and uploading on the local machine."""
+    custom_home = Path(args.custom_home).resolve() if getattr(args, "custom_home", None) else None
+    user_home = custom_home if custom_home is not None else get_user_agent_home()
+    user_home.mkdir(parents=True, exist_ok=True)
+
+    cred_store = CredentialStore(custom_home=user_home)
     existing_ident = get_identity(custom_home=user_home)
+    meta = cred_store.load_metadata()
+    already_enrolled = cred_store.has_credential()
 
-    _safe_print("\n" + "=" * 40)
-    _safe_print("       AI Telemetry Agent Setup")
-    _safe_print("=" * 40)
+    _safe_print("\n" + "=" * 55)
+    _safe_print("       AI Telemetry Agent — Installation")
+    _safe_print("=" * 55)
 
-    if existing_ident:
-        _safe_print("✓ Telemetry Agent already configured")
-        _safe_print(f"Developer: {existing_ident.member_name}")
-        _safe_print(f"Device: {existing_ident.hostname}")
-        _safe_print(f"Device ID: {existing_ident.device_id}")
-        _safe_print(f"Member ID: {existing_ident.member_id}\n")
-    else:
-        # First-time enrollment
+    auto_yes = bool(getattr(args, "yes", False))
+    re_enroll = True
+
+    # 1. Existing enrollment check (safe & idempotent)
+    if already_enrolled:
+        _safe_print("\n✓ Device is already enrolled with a telemetry server:")
+        if meta and meta.server_url:
+            _safe_print(f"  Server URL      : {meta.server_url}")
+        if meta and meta.organization_id:
+            _safe_print(f"  Organization ID : {meta.organization_id}")
+        if meta and meta.developer_id:
+            _safe_print(f"  Developer ID    : {meta.developer_id}")
+        if meta and meta.device_id:
+            _safe_print(f"  Device ID       : {meta.device_id}")
+        if existing_ident and existing_ident.member_name:
+            _safe_print(f"  Developer Name  : {existing_ident.member_name}")
         _safe_print("")
-        name_input = getattr(args, "name", None)
-        if name_input and name_input.strip():
-            member_name = name_input.strip()
-            _safe_print(f"Enter your name: {member_name}")
+
+        explicit_token = getattr(args, "token", None)
+        if explicit_token:
+            re_enroll = True
+        elif auto_yes:
+            re_enroll = False
+            _safe_print("Retaining existing enrollment credentials (-y/--yes specified).")
         else:
             if not sys.stdin.isatty():
-                default_name = detect_os_username() or "Developer"
-                member_name = default_name.strip()
-                _safe_print(f"Enter your name: {member_name}")
+                re_enroll = False
+                _safe_print("Non-interactive terminal: Retaining existing enrollment credentials.")
             else:
-                while True:
-                    try:
-                        raw_name = input("Enter your name: ")
-                    except (EOFError, KeyboardInterrupt):
-                        _safe_print("\nSetup cancelled.")
-                        sys.exit(1)
-                    if raw_name and raw_name.strip():
-                        member_name = raw_name.strip()
-                        break
-                    _safe_print("Error: Name cannot be empty. Please enter a valid developer name.")
+                try:
+                    choice = input("Do you want to re-enroll this device with a new token? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nInstallation cancelled by user.")
+                    sys.exit(1)
+                if choice in ("y", "yes"):
+                    re_enroll = True
+                else:
+                    re_enroll = False
+                    _safe_print("Retaining existing enrollment credentials.")
 
-        hostname = detect_hostname()
-        device_id = getattr(args, "device", None) or get_or_create_device_id(custom_home=user_home)
-
-        _safe_print("\nDetected device:")
-        _safe_print(f"  Hostname: {hostname}")
-        _safe_print(f"  Device ID: {device_id}")
-
-        _safe_print("\nDeveloper:")
-        _safe_print(f"  {member_name}\n")
-
-        # Confirmation
-        auto_yes = getattr(args, "yes", False) or not sys.stdin.isatty() or getattr(args, "name", None) is not None
-        if not auto_yes:
+    # Step A: Determine developer identity
+    name_arg = getattr(args, "name", None)
+    if name_arg is not None:
+        if not name_arg.strip():
+            _safe_print("Error: Developer name cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+        developer_name = name_arg.strip()
+    else:
+        # Precedence: 1. Git local user.name -> 2. Git global user.name -> 3. "team member"
+        default_name = resolve_git_developer_name()
+        if not sys.stdin.isatty() or auto_yes:
+            developer_name = default_name
+        else:
+            prompt_str = f"Enter your developer name [{default_name}]: "
             try:
-                confirm = input("Save this identity? [Y/n]: ").strip().lower()
+                raw_name = input(prompt_str).strip()
             except (EOFError, KeyboardInterrupt):
-                _safe_print("\nSetup cancelled.")
+                _safe_print("\nInstallation cancelled by user.")
                 sys.exit(1)
-            if confirm and confirm not in ("y", "yes"):
-                _safe_print("Setup cancelled by user.")
-                sys.exit(1)
+            developer_name = raw_name if raw_name else default_name
 
-        try:
-            ident = enroll(
-                member_name=member_name,
-                device_id=device_id,
-                hostname=hostname,
-                custom_home=user_home,
-            )
-            _safe_print("✓ Developer identity saved")
-        except Exception as e:
-            _safe_print(f"ERROR: Failed to save developer identity: {e}", file=sys.stderr)
+    if not developer_name:
+        _safe_print("Error: Developer name cannot be empty.", file=sys.stderr)
+        sys.exit(1)
+
+    _safe_print(f"Developer Name: {developer_name}")
+
+    # Steps B & C: Server URL & Token (if enrolling / re-enrolling)
+    allow_insecure = bool(getattr(args, "allow_insecure_http", False))
+    if re_enroll:
+        # Step B: Ask for central server URL
+        server_arg = getattr(args, "server", None)
+        if server_arg is not None:
+            if not server_arg.strip():
+                _safe_print("Error: Server URL cannot be empty.", file=sys.stderr)
+                sys.exit(1)
+            server_url = server_arg.strip()
+        else:
+            default_url = meta.server_url if meta and meta.server_url else None
+            prompt_str = f"Enter central telemetry server URL{' [' + default_url + ']' if default_url else ''}: "
+            if not sys.stdin.isatty() or auto_yes:
+                if default_url:
+                    server_url = default_url
+                else:
+                    _safe_print("Error: --server URL is required in non-interactive mode.", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                try:
+                    raw_url = input(prompt_str).strip()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nInstallation cancelled by user.")
+                    sys.exit(1)
+                server_url = raw_url if raw_url else (default_url or "")
+
+        if not server_url:
+            _safe_print("Error: Server URL cannot be empty.", file=sys.stderr)
             sys.exit(1)
 
-    # Initialize configuration & storage
-    try:
-        settings = load_settings(
-            env_file=getattr(args, "env_file", None),
-            member_id=getattr(args, "member", None),
-            device_id=getattr(args, "device", None),
+        server_url = server_url.rstrip("/")
+        parsed = urllib.parse.urlparse(server_url)
+        if not parsed.scheme or not parsed.netloc or not parsed.hostname:
+            _safe_print(f"Error: Invalid server URL syntax: '{server_url}'. Must include scheme and hostname (e.g. https://telemetry.yourorg.com)", file=sys.stderr)
+            sys.exit(1)
+
+        if parsed.scheme.lower() not in ("http", "https"):
+            _safe_print(f"Error: Unsupported URL scheme '{parsed.scheme}'. Must be 'https' (or 'http' with --allow-insecure-http).", file=sys.stderr)
+            sys.exit(1)
+
+        if parsed.scheme.lower() == "http" and not allow_insecure:
+            if sys.stdin.isatty() and not auto_yes:
+                try:
+                    confirm = input("Warning: Server URL uses unencrypted HTTP. Allow insecure HTTP for testing? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    _safe_print("\nInstallation cancelled by user.")
+                    sys.exit(1)
+                if confirm in ("y", "yes"):
+                    allow_insecure = True
+                else:
+                    _safe_print("Error: Insecure HTTP rejected. Centralized telemetry requires HTTPS.", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                _safe_print("Error: Insecure HTTP rejected. Use HTTPS or pass --allow-insecure-http.", file=sys.stderr)
+                sys.exit(1)
+
+        _safe_print(f"Server URL: {server_url}")
+
+        # Step C: Ask for one-time enrollment token
+        token_arg = getattr(args, "token", None)
+        if token_arg is not None:
+            if not token_arg.strip():
+                _safe_print("Error: Enrollment token cannot be empty.", file=sys.stderr)
+                sys.exit(1)
+            enrollment_token = token_arg.strip()
+        else:
+            if not sys.stdin.isatty() or auto_yes:
+                _safe_print("Error: --token is required in non-interactive mode.", file=sys.stderr)
+                sys.exit(1)
+            try:
+                enrollment_token = getpass.getpass("Enter one-time enrollment token (input hidden): ").strip()
+            except (EOFError, KeyboardInterrupt):
+                _safe_print("\nInstallation cancelled by user.")
+                sys.exit(1)
+
+        if not enrollment_token:
+            _safe_print("Error: Enrollment token cannot be empty.", file=sys.stderr)
+            sys.exit(1)
+
+        # Step D: Enroll the device
+        _safe_print("\nSubmitting enrollment claim...")
+        client = BackendClient(server_url=server_url, allow_insecure_http=allow_insecure)
+        hostname = detect_hostname()
+        platform_name = f"{platform.system()} {platform.release()}"
+        hardware_uuid = getattr(args, "device", None) or get_or_create_device_id(custom_home=user_home)
+
+        try:
+            claim_resp = client.claim_enrollment(
+                enrollment_token=enrollment_token,
+                hardware_uuid=hardware_uuid,
+                hostname=hostname,
+                platform_name=platform_name,
+                agent_version="0.1.4",
+            )
+        except UploaderClientError as uce:
+            _safe_print(f"\nEnrollment claim failed: {uce}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as ex:
+            _safe_print(f"\nUnexpected error during enrollment claim: {ex}", file=sys.stderr)
+            sys.exit(1)
+
+        credential_token = claim_resp.get("device_credential") or claim_resp.get("credential_token")
+        if not credential_token:
+            _safe_print("\nError: Server response missing device credential token.", file=sys.stderr)
+            sys.exit(1)
+
+        device_info = claim_resp.get("device") if isinstance(claim_resp.get("device"), dict) else {}
+        dev_info = claim_resp.get("developer") if isinstance(claim_resp.get("developer"), dict) else {}
+        org_id = str(claim_resp.get("organization_id") or dev_info.get("organization_id", ""))
+        dev_id = str(claim_resp.get("developer_id") or dev_info.get("developer_id", ""))
+        device_id = str(claim_resp.get("device_id") or device_info.get("device_id", ""))
+        token_prefix = str(claim_resp.get("token_prefix", ""))
+        enrolled_at = str(claim_resp.get("enrolled_at") or claim_resp.get("claimed_at") or datetime.now(timezone.utc).isoformat())
+        expires_at = claim_resp.get("expires_at")
+
+        metadata = EnrollmentMetadata(
+            server_url=server_url,
+            organization_id=org_id,
+            developer_id=dev_id,
+            device_id=device_id,
+            token_prefix=token_prefix,
+            enrolled_at=enrolled_at,
+            expires_at=expires_at,
+            hardware_uuid=hardware_uuid,
         )
-        store = JSONLEventStore(settings.data_dir)
+
+        cred_store.save_credential(token=credential_token, metadata=metadata)
+
+        _safe_print("Verifying device credentials...")
+        try:
+            client.verify_device_identity(credential_token)
+            _safe_print("✓ Device credential verified successfully.")
+        except Exception as ex:
+            _safe_print(f"Warning: Identity verification warning: {ex}", file=sys.stderr)
+
+        resolved_member_id = dev_id or None
+        final_server_url = server_url
+    else:
+        # Retaining existing enrollment
+        hardware_uuid = getattr(args, "device", None) or get_or_create_device_id(custom_home=user_home)
+        hostname = detect_hostname()
+        resolved_member_id = meta.developer_id if meta and meta.developer_id else (existing_ident.member_id if existing_ident else None)
+        final_server_url = meta.server_url if meta and meta.server_url else None
+
+    # Persist Developer Identity locally
+    try:
+        ident = enroll(
+            member_name=developer_name,
+            member_id=resolved_member_id,
+            device_id=hardware_uuid,
+            hostname=hostname,
+            custom_home=user_home,
+        )
+        _safe_print("✓ Developer identity saved locally.")
     except Exception as e:
-        _safe_print(f"\nERROR: Failed to initialize local storage: {e}", file=sys.stderr)
+        _safe_print(f"Error: Failed to save developer identity: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Install global Antigravity hook
-    target_hooks_file = Path(args.config) if getattr(args, "config", None) else None
+    # Step E: Install Antigravity Lifecycle Hooks
+    _safe_print("Installing global Antigravity lifecycle hooks...")
+    hooks_file = Path(args.config) if getattr(args, "config", None) else None
     success, msg, backup_path, other_count = install_global_hooks(
-        hooks_file=target_hooks_file,
-        python_exe=getattr(args, "python", None),
+        hooks_file=hooks_file,
+        python_exe=getattr(args, "python", None) or sys.executable,
     )
-
     if not success:
-        _safe_print(f"ERROR: Failed to configure hooks: {msg}", file=sys.stderr)
+        _safe_print(f"Error: Failed to install lifecycle hooks: {msg}", file=sys.stderr)
+        sys.exit(1)
+    _safe_print("✓ Antigravity lifecycle hooks installed.")
+
+    # Step F: Enable uploads
+    config_dict = {
+        "TELEMETRY_UPLOAD_ENABLED": "true",
+        "MEMBER_ID": resolved_member_id or (ident.member_id if 'ident' in locals() else ""),
+        "DEVICE_ID": hardware_uuid,
+    }
+    if final_server_url:
+        config_dict["TELEMETRY_SERVER_URL"] = final_server_url
+    if allow_insecure:
+        config_dict["TELEMETRY_ALLOW_INSECURE_HTTP"] = "true"
+
+    try:
+        saved_cfg_path = save_user_config(config_dict, custom_home=user_home)
+        _safe_print(f"✓ Upload configuration enabled and persisted to {saved_cfg_path.name}.")
+    except Exception as ex:
+        _safe_print(f"Error: Failed to persist upload configuration: {ex}", file=sys.stderr)
         sys.exit(1)
 
-    _safe_print("✓ Antigravity hooks installed")
-    _safe_print("✓ Telemetry agent configured\n")
+    # Optional background service installation
+    install_service_flag = bool(getattr(args, "install_service", False))
+    should_install_service = False
+    if install_service_flag:
+        should_install_service = True
+
+    service_installed_ok = False
+    if should_install_service:
+        _safe_print("\nConfiguring persistent Windows Task Scheduler background uploader...")
+        mgr = WindowsTaskSchedulerManager(custom_home=user_home)
+        ok, msg = mgr.install(start=True)
+        if ok:
+            service_installed_ok = True
+            _safe_print("✓ Persistent background uploader service installed and started.")
+        else:
+            _safe_print(f"\nWarning: Failed to install background service: {msg}", file=sys.stderr)
+            _safe_print("Installation succeeded partially (credentials, hooks, and configuration were saved).", file=sys.stderr)
+            _safe_print("You can retry installing the background service anytime using:", file=sys.stderr)
+            _safe_print("  telemetry-agent service install --start\n", file=sys.stderr)
+
+    _safe_print("\n" + "=" * 55)
+    _safe_print("✓ Installation Complete!")
+    _safe_print(f"  Developer : {developer_name}")
+    if final_server_url:
+        _safe_print(f"  Server    : {final_server_url}")
+    _safe_print(f"  Device ID : {hardware_uuid}")
+    _safe_print("  Hooks     : Installed in ~/.gemini/config/hooks.json")
+    _safe_print("  Uploads   : Configured and enabled")
+    if service_installed_ok:
+        _safe_print("  Service   : Background scheduled task registered and running")
+    else:
+        _safe_print("  Note      : To register the persistent background service, run:")
+        _safe_print("              telemetry-agent service install --start")
+    _safe_print("=" * 55 + "\n")
 
 
 def cmd_start(args: argparse.Namespace) -> None:
@@ -611,7 +819,7 @@ def cmd_enroll(args: argparse.Namespace) -> None:
             hardware_uuid=hardware_uuid,
             hostname=hostname,
             platform_name=platform_name,
-            agent_version="0.1.2",
+            agent_version="0.1.4",
         )
     except UploaderClientError as uce:
         print(f"\nEnrollment claim failed: {uce}", file=sys.stderr)
@@ -1046,7 +1254,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
                 hardware_uuid=hardware_uuid,
                 hostname=hostname,
                 platform_name=platform_name,
-                agent_version="0.1.3",
+                agent_version="0.1.4",
             )
         except UploaderClientError as uce:
             _safe_print(f"\nEnrollment claim failed: {uce}", file=sys.stderr)
@@ -1190,7 +1398,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="telemetry-agent",
-        description="Local AI and Engineering Telemetry Agent v0.1.3",
+        description="Local AI and Engineering Telemetry Agent v0.1.4",
     )
     parser.add_argument("--env-file", type=str, default=None, help="Path to .env configuration file")
 

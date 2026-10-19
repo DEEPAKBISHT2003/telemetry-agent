@@ -47,6 +47,8 @@ def record_to_raw_event(
         "gen_idx": record.idx,
         "reconciled": record.is_reconciled,
     }
+    if getattr(record, "source_variant", None):
+        meta["source_variant"] = record.source_variant
     if record.thinking_tokens is not None:
         meta["thinking_tokens"] = record.thinking_tokens
     if record.response_tokens is not None:
@@ -105,6 +107,7 @@ class GenerationRecord:
     timestamp: Optional[str] = None
     is_reconciled: bool = False
     raw_size: int = 0
+    source_variant: str = "ide"
 
     @property
     def total_tokens(self) -> Optional[int]:
@@ -244,6 +247,7 @@ def extract_generation_record(
     idx: int,
     conversation_id: str,
     raw_size: int = 0,
+    source_variant: str = "ide",
 ) -> Optional[GenerationRecord]:
     """Decode and validate a GenerationRecord from a raw gen_metadata protobuf BLOB.
 
@@ -370,6 +374,7 @@ def extract_generation_record(
         timestamp=iso_timestamp,
         is_reconciled=is_reconciled,
         raw_size=raw_size or len(buf),
+        source_variant=source_variant,
     )
 
 
@@ -385,7 +390,7 @@ class AntigravitySQLiteReader:
         self,
         conversations_dirs: Optional[List[Union[str, Path]]] = None,
         state_file: Optional[Union[str, Path]] = None,
-        sync_historical: bool = False,
+        sync_historical: Optional[bool] = None,
     ):
         if conversations_dirs:
             self.conversations_dirs = [Path(d).resolve() for d in conversations_dirs]
@@ -398,7 +403,12 @@ class AntigravitySQLiteReader:
             home = Path(os.environ.get("USERPROFILE", os.path.expanduser("~")))
             self.state_file = (home / ".telemetry_agent" / "state" / "antigravity_sqlite_state.json").resolve()
 
-        self.sync_historical = sync_historical
+        if sync_historical is None:
+            env_sync = os.environ.get("ANTIGRAVITY_SYNC_HISTORICAL", "false").lower()
+            self.sync_historical = env_sync in ("1", "true", "yes")
+        else:
+            self.sync_historical = sync_historical
+
         self._state: Dict[str, Any] = self._load_state()
         self._pending_updates: Dict[str, Dict[str, Any]] = {}
         self._initialized = bool(self._state.get("conversations"))
@@ -424,11 +434,17 @@ class AntigravitySQLiteReader:
     @staticmethod
     def _default_search_dirs() -> List[Path]:
         """Resolve standard Antigravity conversation database directories on Windows / macOS / Linux."""
+        candidates = []
+        env_override = os.environ.get("ANTIGRAVITY_CONVERSATIONS_DIR")
+        if env_override:
+            candidates.append(Path(env_override))
+
         home = Path(os.environ.get("USERPROFILE", os.path.expanduser("~")))
-        candidates = [
+        candidates.extend([
+            home / ".gemini" / "antigravity-cli" / "conversations",
             home / ".gemini" / "antigravity-ide" / "conversations",
             home / ".gemini" / "antigravity" / "conversations",
-        ]
+        ])
         return [c for c in candidates]
 
     def _load_state(self) -> Dict[str, Any]:
@@ -464,8 +480,13 @@ class AntigravitySQLiteReader:
             if not cdir.is_dir():
                 continue
             for f in cdir.glob("*.db"):
-                if f.is_file():
-                    discovered.append(f)
+                if not f.is_file():
+                    continue
+                # Exclude summary and non-session databases
+                fname_lower = f.name.lower()
+                if fname_lower == "conversation_summaries.db" or fname_lower.endswith("_summaries.db") or "summary" in fname_lower:
+                    continue
+                discovered.append(f)
         discovered.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
         return discovered
 
@@ -502,6 +523,7 @@ class AntigravitySQLiteReader:
     def read_new_records(self, db_path: Path, last_idx: int = -1) -> List[GenerationRecord]:
         """Extract generation records with index > last_idx in ascending index order."""
         conv_id = self.get_conversation_id(db_path)
+        source_variant = "cli" if "antigravity-cli" in db_path.as_posix() else "ide"
         records: List[GenerationRecord] = []
 
         try:
@@ -520,6 +542,7 @@ class AntigravitySQLiteReader:
                             idx=int(r_idx),
                             conversation_id=conv_id,
                             raw_size=int(r_size or len(r_data)),
+                            source_variant=source_variant,
                         )
                         if rec:
                             records.append(rec)

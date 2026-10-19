@@ -392,7 +392,7 @@ class SQLiteTokenProvider(AntigravityTelemetryProvider):
         self,
         conversations_dirs: Optional[List[Any]] = None,
         state_file: Optional[Any] = None,
-        sync_historical: bool = False,
+        sync_historical: Optional[bool] = None,
     ):
         from ai_telemetry_agent.sources.antigravity_sqlite import (
             AntigravitySQLiteReader,
