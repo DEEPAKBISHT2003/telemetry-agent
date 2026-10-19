@@ -125,6 +125,10 @@ class TicketSummary:
     source: str = "none"
     confirmation_state: str = "confirmed"
     session_ids: List[str] = field(default_factory=list)
+    hook_executions_count: int = 0
+    has_estimated_credits: bool = False
+    estimated_credits: float = 0.0
+    estimated_credits_exact: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

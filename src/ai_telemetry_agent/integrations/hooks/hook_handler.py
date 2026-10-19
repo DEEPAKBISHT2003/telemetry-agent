@@ -17,14 +17,22 @@ for parent in [CURRENT_DIR.parents[2], CURRENT_DIR.parents[3]]:
     if str(parent) not in sys.path:
         sys.path.insert(0, str(parent))
 
-from ai_telemetry_agent.config.settings import load_settings
-from ai_telemetry_agent.core.collector import TelemetryCollector
-from ai_telemetry_agent.core.repository import detect_repository_context
-from ai_telemetry_agent.sources.ai_provider import AIEventBuilder
+try:
+    from ai_telemetry_agent.config.settings import load_settings
+    from ai_telemetry_agent.core.collector import TelemetryCollector
+    from ai_telemetry_agent.core.repository import detect_repository_context
+    from ai_telemetry_agent.sources.ai_provider import AIEventBuilder
+except Exception:
+    load_settings = None
+    TelemetryCollector = None
+    detect_repository_context = None
+    AIEventBuilder = None
 
 
 def process_hook(hook_type: str) -> None:
     """Read stdin from Antigravity hook, emit telemetry event, and return required stdout."""
+    if TelemetryCollector is None:
+        sys.exit(0)
     raw_input = ""
     try:
         raw_input = sys.stdin.read()

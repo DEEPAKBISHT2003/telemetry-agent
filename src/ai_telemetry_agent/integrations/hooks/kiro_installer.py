@@ -31,14 +31,47 @@ SUPPORTED_TRIGGERS = [
 
 
 def get_kiro_hooks_path(custom_home: Optional[Path] = None, workspace_root: Optional[Path] = None) -> Path:
-    """Return the absolute path to the Kiro hooks.json file.
+    """Return the absolute path to the Kiro hooks configuration file.
 
-    Defaults to: Path.home() / ".kiro" / "hooks" / "telemetry.json"
+    Search priority:
+    1. KIRO_HOOKS_PATH or KIRO_HOOK_CONFIG environment variable
+    2. Explicit workspace_root / .kiro / hooks / telemetry.json (or any *.json if directory exists)
+    3. Current working directory / .kiro / hooks / telemetry.json (or any *.json)
+    4. User home directory ~/.kiro/hooks/telemetry.json
     """
+    env_override = os.environ.get("KIRO_HOOKS_PATH") or os.environ.get("KIRO_HOOK_CONFIG")
+    if env_override and env_override.strip():
+        return Path(env_override.strip()).resolve()
+
     if workspace_root is not None:
-        return (workspace_root / ".kiro" / "hooks" / "telemetry.json").resolve()
+        target = (workspace_root / ".kiro" / "hooks" / "telemetry.json").resolve()
+        if target.exists():
+            return target
+        hooks_dir = workspace_root / ".kiro" / "hooks"
+        if hooks_dir.is_dir():
+            for f in sorted(hooks_dir.glob("*.json")):
+                return f.resolve()
+        return target
+
+    # Check cwd workspace hooks
+    cwd_target = (Path.cwd() / ".kiro" / "hooks" / "telemetry.json").resolve()
+    if cwd_target.exists():
+        return cwd_target
+    cwd_hooks_dir = Path.cwd() / ".kiro" / "hooks"
+    if cwd_hooks_dir.is_dir():
+        for f in sorted(cwd_hooks_dir.glob("*.json")):
+            return f.resolve()
+
     home = custom_home if custom_home is not None else Path.home()
-    return (home / ".kiro" / "hooks" / "telemetry.json").resolve()
+    user_target = (home / ".kiro" / "hooks" / "telemetry.json").resolve()
+    if user_target.exists():
+        return user_target
+    home_hooks_dir = home / ".kiro" / "hooks"
+    if home_hooks_dir.is_dir():
+        for f in sorted(home_hooks_dir.glob("*.json")):
+            return f.resolve()
+
+    return user_target
 
 
 def get_kiro_hook_handler_path() -> Path:
@@ -261,7 +294,11 @@ def get_kiro_hook_status(
             hooks_list = data.get("hooks", [])
             if isinstance(hooks_list, list):
                 telemetry_hooks = [
-                    h for h in hooks_list if isinstance(h, dict) and str(h.get("name", "")).startswith(KIRO_HOOK_PREFIX)
+                    h for h in hooks_list
+                    if isinstance(h, dict) and (
+                        str(h.get("name", "")).startswith(KIRO_HOOK_PREFIX)
+                        or "kiro_hook_handler" in str(h.get("action", {}))
+                    )
                 ]
                 status["telemetry_hook_installed"] = len(telemetry_hooks) > 0
                 status["telemetry_hooks_count"] = len(telemetry_hooks)

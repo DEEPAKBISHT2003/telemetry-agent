@@ -46,12 +46,25 @@ def process_kiro_hook(hook_trigger: str, collector: Optional[TelemetryCollector]
         repo_context = detect_repository_context(cwd)
         repo_dict = repo_context.to_dict(include_local_root=True) if repo_context.is_git_repo else None
 
+        # Resolve explicit parent AI operation correlation
+        parent_op_id = (
+            data.get("parent_operation_id")
+            or data.get("parent_run_id")
+            or data.get("parent_execution_id")
+        )
+        tool_use_id = data.get("tool_use_id")
+        exec_id = data.get("execution_id")
+        if not parent_op_id and tool_use_id and exec_id and tool_use_id != exec_id:
+            parent_op_id = exec_id
+
         # Privacy-safe metadata (no prompt text, no tool arguments, no file contents)
         clean_meta: Dict[str, Any] = {
             "hook_trigger": hook_trigger,
             "hook_event_name": hook_event_name,
             "provider": "kiro_ide",
         }
+        if parent_op_id:
+            clean_meta["parent_operation_id"] = parent_op_id
         if file_path:
             clean_meta["file_extension"] = Path(file_path).suffix
         if command:
@@ -84,13 +97,18 @@ def process_kiro_hook(hook_trigger: str, collector: Optional[TelemetryCollector]
             )
         elif hook_trigger in ("PreToolUse", "PostToolUse", "pre_tool_use", "post_tool_use"):
             clean_meta["is_post"] = hook_trigger in ("PostToolUse", "post_tool_use")
+            tool_call_id = data.get("tool_use_id") or data.get("execution_id")
             raw_event = AIEventBuilder.build_tool_call(
                 tool_name=tool_name or "unknown_tool",
+                provider="kiro_ide",
                 session_id=session_id,
+                run_id=tool_call_id,
                 capture_method="kiro_hooks",
                 repository=repo_dict,
                 metadata=clean_meta,
             )
+            if tool_call_id:
+                raw_event["event_id"] = f"kiro_tool_{tool_call_id}"
         elif hook_trigger in ("Stop", "stop", "SessionEnd", "session_end"):
             # Assign deterministic run_id and event_id for the session completion so that
             # firing both Stop and SessionEnd does not result in duplicate events.
@@ -133,16 +151,48 @@ def process_kiro_hook(hook_trigger: str, collector: Optional[TelemetryCollector]
                 },
             }
 
+        event = None
+        rec = None
+        resulting_op_id: Optional[str] = None
+        jira_key: Optional[str] = None
+
+        if raw_event and parent_op_id and "payload" in raw_event:
+            raw_event["payload"]["parent_operation_id"] = parent_op_id
+
         if raw_event:
             event = collector.processor.process_raw(raw_event)
             if event:
                 collector.store.save_event(event)
                 rec = collector._ai_event_to_operation_record(event)
-                if rec:
-                    try:
-                        collector.accounting_store.save_operation(rec)
-                    except Exception:
-                        pass
+                if event.context and event.context.jira_task_id:
+                    jira_key = event.context.jira_task_id
+
+        # Resolve confirmed Jira ticket using attribution store with repository matching
+        # Do not infer Jira attribution solely from timestamps without repository matching
+        if not jira_key and repo_context.is_git_repo and collector and getattr(collector, "attribution_store", None):
+            try:
+                now_ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                ev_ts = event.timestamp if event else now_ts
+                attr = collector.attribution_store.find_attribution_for_event(
+                    repo_name=repo_context.repository_name,
+                    timestamp=ev_ts,
+                    repo_root=repo_context.repository_root,
+                )
+                if attr:
+                    jira_key = attr.issue_key
+            except Exception:
+                jira_key = None
+
+        if rec:
+            if not rec.jira_key and jira_key:
+                rec.jira_key = jira_key
+            if parent_op_id and not rec.parent_operation_id:
+                rec.parent_operation_id = parent_op_id
+            try:
+                collector.accounting_store.save_operation(rec)
+                resulting_op_id = rec.operation_id
+            except Exception:
+                pass
 
         is_shell = hook_trigger in ("PostFileSave", "PostFileCreate", "PostFileDelete")
         initiates_ai = hook_trigger in ("UserPromptSubmit", "user_prompt_submit", "SessionStart", "session_start")
@@ -154,6 +204,12 @@ def process_kiro_hook(hook_trigger: str, collector: Optional[TelemetryCollector]
         else:
             trig = "event_driven"
 
+        dedup_id = (
+            data.get("execution_id")
+            or data.get("tool_use_id")
+            or (f"{session_id}:{hook_trigger}:{tool_name or file_path or command or ''}" if session_id else None)
+        )
+
         try:
             collector.hook_registry.record_execution(
                 hook_id=f"kiro_{hook_trigger.lower()}",
@@ -161,12 +217,17 @@ def process_kiro_hook(hook_trigger: str, collector: Optional[TelemetryCollector]
                 trigger_type=trig,
                 provider="kiro_ide",
                 session_id=session_id,
+                outcome="success",
                 is_shell_only=is_shell,
                 initiates_ai=initiates_ai,
+                resulting_operation_id=resulting_op_id,
+                parent_operation_id=parent_op_id,
+                jira_key=jira_key,
                 credits_used=0 if is_shell else None,
                 measurement_status="measured" if is_shell else "unavailable",
                 schedule_expression=data.get("schedule_expression"),
                 metadata=clean_meta,
+                deduplication_key=dedup_id,
             )
         except Exception:
             pass

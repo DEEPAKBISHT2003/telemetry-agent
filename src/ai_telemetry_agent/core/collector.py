@@ -535,26 +535,15 @@ class TelemetryCollector:
         cm = payload.get("capture_method", "")
         if (
             provider == "kiro_ide"
+            and cm == "messages_jsonl"
             and (
-                (
-                    cm == "messages_jsonl"
-                    and (
-                        event.event_type in (
-                            EventType.AI_TOOL_CALL,
-                            EventType.TOOL_CALL,
-                        )
-                        or (
-                            event.event_type == EventType.AI_TURN
-                            and metadata.get("key") == "contextUsage"
-                        )
-                    )
+                event.event_type in (
+                    EventType.AI_TOOL_CALL,
+                    EventType.TOOL_CALL,
                 )
                 or (
-                    cm == "kiro_hooks"
-                    and event.event_type in (
-                        EventType.AI_TOOL_CALL,
-                        EventType.TOOL_CALL,
-                    )
+                    event.event_type == EventType.AI_TURN
+                    and metadata.get("key") == "contextUsage"
                 )
             )
         ):
@@ -655,8 +644,17 @@ class TelemetryCollector:
             }
 
         # Parent links
-        parent_op = metadata.get("parent_agent_id") or metadata.get("parent_execution_id")
+        parent_op = (
+            payload.get("parent_operation_id")
+            or metadata.get("parent_operation_id")
+            or payload.get("parent_run_id")
+            or metadata.get("parent_run_id")
+            or metadata.get("parent_agent_id")
+            or metadata.get("parent_execution_id")
+        )
         parent_sess = payload.get("parent_session_id") or metadata.get("parent_session_id")
+        corr_status = payload.get("correlation_status") or metadata.get("correlation_status")
+        corr_reason = payload.get("correlation_reason") or metadata.get("correlation_reason")
 
         # Models
         model_req = payload.get("selected_model") or payload.get("model")
@@ -726,6 +724,8 @@ class TelemetryCollector:
             operation_id=run_id,
             parent_operation_id=parent_op,
             parent_session_id=parent_sess,
+            correlation_status=corr_status,
+            correlation_reason=corr_reason,
             provider=provider,
             source=payload.get("capture_method", "collector"),
             operation_type=op_type,

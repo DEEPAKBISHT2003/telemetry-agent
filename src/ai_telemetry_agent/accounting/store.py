@@ -11,7 +11,7 @@ import json
 import os
 from pathlib import Path
 import threading
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Union
 
 from ai_telemetry_agent.accounting.models import (
     AIOperationRecord,
@@ -19,6 +19,7 @@ from ai_telemetry_agent.accounting.models import (
     MeasurementStatus,
     to_decimal,
 )
+from ai_telemetry_agent.config.settings import resolve_data_dir
 from ai_telemetry_agent.core.validation import is_valid_iso8601
 from ai_telemetry_agent.logging.structured import get_logger
 
@@ -28,14 +29,8 @@ logger = get_logger("telemetry.accounting.store")
 class AccountingStore:
     """Thread-safe store for AI operation records and reconciliation ledgers."""
 
-    def __init__(self, data_dir: Optional[Path] = None):
-        if data_dir:
-            self.data_dir = Path(data_dir)
-        else:
-            home = os.environ.get("TELEMETRY_AGENT_HOME")
-            base = Path(home).resolve() if home else (Path.home() / ".telemetry_agent").resolve()
-            self.data_dir = base / "data"
-
+    def __init__(self, data_dir: Optional[Union[str, Path]] = None):
+        self.data_dir = resolve_data_dir(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.reconciliation_file = self.data_dir / "account_reconciliation.json"
         if not self.reconciliation_file.exists():
@@ -102,12 +97,25 @@ class AccountingStore:
                         or (existing.measurement_status in (MeasurementStatus.PENDING, MeasurementStatus.UNAVAILABLE)
                             and record.measurement_status == MeasurementStatus.MEASURED)
                         or (existing.execution_status == "incomplete" and record.execution_status != "incomplete")
+                        or (existing.jira_key is None and record.jira_key is not None)
+                        or (existing.estimated_credits is None and record.estimated_credits is not None)
+                        or (existing.parent_operation_id is None and record.parent_operation_id is not None)
+                        or (existing.correlation_status != record.correlation_status and record.correlation_status is not None)
+                        or (existing.correlation_reason != record.correlation_reason and record.correlation_reason is not None)
                     )
                     if not can_update:
                         logger.debug("accounting_duplicate_ignored", dedup_key=record.deduplication_key, operation_id=record.operation_id)
                         return False
-                    # Preserve original operation ID when updating
+                    # Preserve original operation ID and existing measured credits when updating
                     record.operation_id = existing.operation_id
+                    if record.credits_used is None and existing.credits_used is not None:
+                        record.credits_used = existing.credits_used
+                        record.measurement_status = existing.measurement_status
+                        record.credit_source = existing.credit_source
+                    if record.jira_key is None and existing.jira_key is not None:
+                        record.jira_key = existing.jira_key
+                    if record.parent_operation_id is None and existing.parent_operation_id is not None:
+                        record.parent_operation_id = existing.parent_operation_id
 
             # Save to date-partitioned JSONL file
             file_path = self._get_file_path_for_timestamp(record.completed_at or record.started_at)
@@ -149,6 +157,7 @@ class AccountingStore:
             except Exception:
                 continue
         return None
+    get_operation = get_operation_by_id
 
     def get_operations(
         self,

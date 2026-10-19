@@ -13,7 +13,7 @@ import re
 import threading
 from typing import Any, Dict, List, Optional, Set, Union
 
-from ai_telemetry_agent.config.settings import get_user_agent_home
+from ai_telemetry_agent.config.settings import get_user_agent_home, resolve_data_dir
 from ai_telemetry_agent.core.event import TelemetryEvent
 from ai_telemetry_agent.logging.structured import get_logger
 from ai_telemetry_agent.storage.base import EventStore, StoragePersistenceError
@@ -25,12 +25,7 @@ class JSONLEventStore(EventStore):
     """Event store persisting events to date-based JSONL files in ~/.telemetry_agent/data/."""
 
     def __init__(self, data_dir: Optional[Union[str, Path]] = None):
-        if data_dir is None:
-            user_home = get_user_agent_home()
-            self.data_dir = (user_home / "data").resolve()
-        else:
-            self.data_dir = Path(data_dir).resolve()
-
+        self.data_dir = resolve_data_dir(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._seen_ids: Set[str] = set()

@@ -18,10 +18,12 @@ class TicketAggregator:
         event_store: EventStore,
         attribution_store: AttributionStore,
         jira_adapter: Optional[JiraAdapter] = None,
+        hook_registry: Optional[Any] = None,
     ):
         self.event_store = event_store
         self.attribution_store = attribution_store
         self.jira_adapter = jira_adapter or NullJiraAdapter()
+        self.hook_registry = hook_registry
 
     def get_ticket_summaries(
         self,
@@ -175,6 +177,10 @@ class TicketAggregator:
                     # Do not count ai_run_started as a completion run
                     pass
 
+                is_hook = bool(cm == "kiro_hooks" or (p.get("metadata") and p["metadata"].get("hook_trigger")))
+                if is_hook:
+                    summary.hook_executions_count += 1
+
                 # Credit aggregation: exactly aggregate numeric credits
                 creds = p.get("credits")
                 if creds is not None and isinstance(creds, (int, float)):
@@ -223,5 +229,36 @@ class TicketAggregator:
                         s_obj.session_ids.append(sid)
                         s_obj.sessions_count += 1
                         s_obj.duration_seconds = round(s_obj.duration_seconds + dur_per_ticket, 2)
+
+        # Merge hook execution records from hook_registry if available
+        if self.hook_registry:
+            h_execs = self.hook_registry.get_executions(limit=10000)
+            seen_hook_op_ids: Set[str] = set()
+            for tg, r_set in seen_runs_by_group.items():
+                seen_hook_op_ids.update(r_set)
+
+            for h in h_execs:
+                t_key = h.jira_key or "UNASSIGNED"
+                if ticket_key and t_key.upper() != ticket_key.upper():
+                    continue
+
+                if t_key not in summaries:
+                    continue
+
+                s_obj = summaries[t_key]
+                if h.resulting_operation_id and h.resulting_operation_id in seen_hook_op_ids:
+                    # Already tracked run-completion event for this hook
+                    if h.estimated_credits is not None:
+                        s_obj.has_estimated_credits = True
+                        s_obj.estimated_credits = round(s_obj.estimated_credits + float(h.estimated_credits), 4)
+                        s_obj.estimated_credits_exact = str(s_obj.estimated_credits)
+                    continue
+
+                # Shell or standalone hook execution
+                s_obj.hook_executions_count += 1
+                if h.estimated_credits is not None:
+                    s_obj.has_estimated_credits = True
+                    s_obj.estimated_credits = round(s_obj.estimated_credits + float(h.estimated_credits), 4)
+                    s_obj.estimated_credits_exact = str(s_obj.estimated_credits)
 
         return summaries

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional, Union
 import uuid
 
 
@@ -19,6 +19,30 @@ def get_user_agent_home() -> Path:
     if override:
         return Path(override).resolve()
     return (Path.home() / ".telemetry_agent").resolve()
+
+
+def resolve_data_dir(
+    custom_path: Optional[Union[str, Path]] = None,
+    settings: Optional[Any] = None,
+) -> Path:
+    """Resolve the active data directory consistently across all stores and CLI.
+
+    Priority:
+    1. Explicit custom_path passed to constructor or CLI argument.
+    2. settings.data_dir if Settings instance is provided.
+    3. TELEMETRY_DATA_DIR environment variable.
+    4. Default fallback: ~/.telemetry_agent/data.
+    """
+    if custom_path:
+        p = Path(custom_path)
+        return (PROJECT_ROOT / p).resolve() if not p.is_absolute() else p.resolve()
+    if settings is not None and getattr(settings, "data_dir", None):
+        return Path(settings.data_dir).resolve()
+    override = os.environ.get("TELEMETRY_DATA_DIR")
+    if override and override.strip():
+        p = Path(override.strip())
+        return (PROJECT_ROOT / p).resolve() if not p.is_absolute() else p.resolve()
+    return (get_user_agent_home() / "data").resolve()
 
 
 def get_or_create_device_id(custom_home: Optional[Path] = None) -> str:
@@ -128,8 +152,9 @@ class Settings:
     def data_dir(self) -> Path:
         """Return the persistent directory storing date-based JSONL files (~/.telemetry_agent/data)."""
         override = os.environ.get("TELEMETRY_DATA_DIR")
-        if override:
-            return Path(override).resolve()
+        if override and override.strip():
+            p = Path(override.strip())
+            return (PROJECT_ROOT / p).resolve() if not p.is_absolute() else p.resolve()
         if self.telemetry_data_dir:
             p = Path(self.telemetry_data_dir)
             return (PROJECT_ROOT / p).resolve() if not p.is_absolute() else p.resolve()

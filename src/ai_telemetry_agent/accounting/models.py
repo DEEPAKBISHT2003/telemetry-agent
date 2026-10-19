@@ -186,6 +186,12 @@ class AIOperationRecord:
     # Optional monetary cost estimate (clearly distinct from authoritative credits)
     cost_estimate_usd: Optional[Decimal] = None
 
+    # Estimated credit allocation for unmeasured hooks correlated with measured runs
+    estimated_credits: Optional[Decimal] = None
+    allocation_method: Optional[str] = None
+    correlation_status: Optional[str] = None
+    correlation_reason: Optional[str] = None
+
     # Attribution & Context
     jira_key: Optional[str] = None
     repository: Optional[Dict[str, Any]] = None
@@ -205,6 +211,8 @@ class AIOperationRecord:
             self.credits_used = to_decimal(self.credits_used)
         if self.cost_estimate_usd is not None and not isinstance(self.cost_estimate_usd, Decimal):
             self.cost_estimate_usd = to_decimal(self.cost_estimate_usd)
+        if self.estimated_credits is not None and not isinstance(self.estimated_credits, Decimal):
+            self.estimated_credits = to_decimal(self.estimated_credits)
 
     @property
     def has_measured_credits(self) -> bool:
@@ -240,6 +248,11 @@ class AIOperationRecord:
             "measurement_status": self.measurement_status,
             "token_usage": self.token_usage,
             "cost_estimate_usd": float(self.cost_estimate_usd) if self.cost_estimate_usd is not None else None,
+            "estimated_credits": float(self.estimated_credits) if self.estimated_credits is not None else None,
+            "estimated_credits_exact": str(self.estimated_credits) if self.estimated_credits is not None else None,
+            "allocation_method": self.allocation_method,
+            "correlation_status": self.correlation_status,
+            "correlation_reason": self.correlation_reason,
             "jira_key": self.jira_key,
             "repository": self.repository,
             "branch": self.branch,
@@ -261,6 +274,11 @@ class AIOperationRecord:
 
         cost_raw = data.get("cost_estimate_usd")
         cost_decimal = to_decimal(cost_raw)
+
+        est_raw = data.get("estimated_credits_exact")
+        if est_raw is None:
+            est_raw = data.get("estimated_credits")
+        est_decimal = to_decimal(est_raw)
 
         op_type = data.get("operation_type", OperationType.PROMPT)
         metadata = dict(data.get("metadata") or {})
@@ -318,6 +336,10 @@ class AIOperationRecord:
             measurement_status=data.get("measurement_status", MeasurementStatus.MEASURED),
             token_usage=data.get("token_usage"),
             cost_estimate_usd=cost_decimal,
+            estimated_credits=est_decimal,
+            allocation_method=data.get("allocation_method"),
+            correlation_status=data.get("correlation_status"),
+            correlation_reason=data.get("correlation_reason"),
             jira_key=data.get("jira_key"),
             repository=data.get("repository"),
             branch=data.get("branch"),

@@ -27,8 +27,9 @@ from ai_telemetry_agent.accounting.store import AccountingStore
 class AccountingAggregator:
     """Aggregates operation accounting records with strict decimal-safe accounting."""
 
-    def __init__(self, store: AccountingStore):
+    def __init__(self, store: AccountingStore, hook_registry: Optional[Any] = None):
         self.store = store
+        self.hook_registry = hook_registry
 
     def get_summary(
         self,
@@ -180,16 +181,92 @@ class AccountingAggregator:
             if op.credits_used is not None:
                 entry["credits"] += op.credits_used
 
-        # 11. By Hook
-        by_hook: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"credits": Decimal("0"), "count": 0, "trigger": "unknown"})
+        # 11. By Hook and Hook-to-Ticket correlation (idempotent, avoiding double-counting)
+        hook_entries: List[Dict[str, Any]] = []
+        seen_resulting_op_ids: Set[str] = set()
+
+        if self.hook_registry:
+            h_execs = self.hook_registry.get_executions(limit=10000)
+            if date_from:
+                h_execs = [e for e in h_execs if (e.executed_at or "")[:10] >= date_from]
+            if date_to:
+                h_execs = [e for e in h_execs if (e.executed_at or "")[:10] <= date_to]
+            if jira_key:
+                h_execs = [e for e in h_execs if e.jira_key == jira_key]
+            if provider:
+                h_execs = [e for e in h_execs if e.provider == provider]
+
+            for h in h_execs:
+                if h.resulting_operation_id:
+                    seen_resulting_op_ids.add(h.resulting_operation_id)
+                hook_entries.append({
+                    "hook_name": h.hook_name or h.hook_id or "unnamed_hook",
+                    "trigger": h.trigger_type,
+                    "jira_key": h.jira_key or "UNASSIGNED",
+                    "credits": h.credits_used,
+                    "estimated_credits": h.estimated_credits,
+                    "resulting_operation_id": h.resulting_operation_id,
+                })
+
+        # Also include any hook operations from operation_level_ops that weren't already tracked in hook_registry
         for op in operation_level_ops:
             if op.hook_name or op.hook_id:
-                name = op.hook_name or op.hook_id or "unnamed_hook"
-                entry = by_hook[name]
-                entry["count"] += 1
-                entry["trigger"] = op.trigger_type
-                if op.credits_used is not None:
-                    entry["credits"] += op.credits_used
+                if op.operation_id and op.operation_id in seen_resulting_op_ids:
+                    continue
+                hook_entries.append({
+                    "hook_name": op.hook_name or op.hook_id or "unnamed_hook",
+                    "trigger": op.trigger_type,
+                    "jira_key": op.jira_key or "UNASSIGNED",
+                    "credits": op.credits_used,
+                    "estimated_credits": getattr(op, "estimated_credits", None),
+                    "resulting_operation_id": op.operation_id,
+                })
+
+        by_hook: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+            "credits": Decimal("0"),
+            "estimated_credits": Decimal("0"),
+            "has_estimates": False,
+            "count": 0,
+            "trigger": "unknown",
+            "by_ticket": defaultdict(lambda: {"count": 0, "credits": Decimal("0"), "estimated_credits": Decimal("0")}),
+        })
+
+        ticket_hooks: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+            "hook_count": 0,
+            "hook_credits": Decimal("0"),
+            "hook_estimated_credits": Decimal("0"),
+            "has_estimates": False,
+            "by_hook": defaultdict(lambda: {"count": 0, "credits": Decimal("0"), "estimated_credits": Decimal("0")}),
+        })
+
+        for h in hook_entries:
+            name = h["hook_name"]
+            entry = by_hook[name]
+            entry["count"] += 1
+            entry["trigger"] = h["trigger"]
+
+            t_key = h["jira_key"]
+            t_entry = entry["by_ticket"][t_key]
+            t_entry["count"] += 1
+
+            th = ticket_hooks[t_key]
+            th["hook_count"] += 1
+            h_entry = th["by_hook"][name]
+            h_entry["count"] += 1
+
+            if h["credits"] is not None:
+                entry["credits"] += h["credits"]
+                t_entry["credits"] += h["credits"]
+                th["hook_credits"] += h["credits"]
+                h_entry["credits"] += h["credits"]
+
+            if h["estimated_credits"] is not None:
+                entry["estimated_credits"] += h["estimated_credits"]
+                entry["has_estimates"] = True
+                t_entry["estimated_credits"] += h["estimated_credits"]
+                th["hook_estimated_credits"] += h["estimated_credits"]
+                th["has_estimates"] = True
+                h_entry["estimated_credits"] += h["estimated_credits"]
 
         # 12. Account Checkpoints & Reconciliation Discrepancy
         checkpoints = self.store.get_account_checkpoints(provider=provider)
@@ -206,6 +283,29 @@ class AccountingAggregator:
 
         measured_ops_cnt = len([op for op in operation_level_ops if op.credits_used is not None])
         unmeasured_ops_cnt = len([op for op in operation_level_ops if op.credits_used is None])
+
+        def _fmt_ticket_hook_data(t_key: str) -> Dict[str, Any]:
+            th = ticket_hooks.get(t_key, {})
+            h_by_hook = {
+                hk: {
+                    "count": hv["count"],
+                    "credits": _fmt_dec(hv["credits"]),
+                    "credits_exact": str(hv["credits"]),
+                    "estimated_credits": _fmt_dec(hv["estimated_credits"]) if hv["estimated_credits"] > 0 else None,
+                    "estimated_credits_exact": str(hv["estimated_credits"]) if hv["estimated_credits"] > 0 else None,
+                }
+                for hk, hv in th.get("by_hook", {}).items()
+            }
+            return {
+                "hook_count": th.get("hook_count", 0),
+                "hook_credits": _fmt_dec(th.get("hook_credits", Decimal("0"))),
+                "hook_credits_exact": str(th.get("hook_credits", Decimal("0"))),
+                "hook_estimated_credits": _fmt_dec(th["hook_estimated_credits"]) if th.get("has_estimates") else None,
+                "hook_estimated_credits_exact": str(th["hook_estimated_credits"]) if th.get("has_estimates") else None,
+                "by_hook": h_by_hook,
+            }
+
+        unassigned_hook_data = _fmt_ticket_hook_data("UNASSIGNED")
 
         return {
             "total_operations_count": len(operation_level_ops),
@@ -258,6 +358,7 @@ class AccountingAggregator:
                         "credits_exact": str(v["credits"]),
                         "count": v["count"],
                         "sessions_count": len(v["sessions"]),
+                        **_fmt_ticket_hook_data(k),
                     }
                     for k, v in by_ticket.items()
                 },
@@ -265,6 +366,7 @@ class AccountingAggregator:
                     "credits": _fmt_dec(unassigned_credits),
                     "credits_exact": str(unassigned_credits),
                     "count": unassigned_count,
+                    **unassigned_hook_data,
                 },
             },
             "by_model": {
@@ -272,8 +374,34 @@ class AccountingAggregator:
                 for k, v in by_model.items()
             },
             "by_hook": {
-                k: {"credits": _fmt_dec(v["credits"]), "credits_exact": str(v["credits"]), "count": v["count"], "trigger": v["trigger"]}
+                k: {
+                    "credits": _fmt_dec(v["credits"]),
+                    "credits_exact": str(v["credits"]),
+                    "count": v["count"],
+                    "trigger": v["trigger"],
+                    "estimated_credits": _fmt_dec(v["estimated_credits"]) if v["has_estimates"] else None,
+                    "estimated_credits_exact": str(v["estimated_credits"]) if v["has_estimates"] else None,
+                    "by_ticket": {
+                        tk: {
+                            "count": tv["count"],
+                            "credits": _fmt_dec(tv["credits"]),
+                            "credits_exact": str(tv["credits"]),
+                            "estimated_credits": _fmt_dec(tv["estimated_credits"]) if tv["estimated_credits"] > 0 else None,
+                            "estimated_credits_exact": str(tv["estimated_credits"]) if tv["estimated_credits"] > 0 else None,
+                        }
+                        for tk, tv in v["by_ticket"].items()
+                    },
+                }
                 for k, v in by_hook.items()
+            },   
+            "hook_diagnostics": self.hook_registry.get_diagnostics() if self.hook_registry and hasattr(self.hook_registry, "get_diagnostics") else {
+                "eligible_count": 0,
+                "ineligible_count": 0,
+                "ambiguous_count": 0,
+                "total_estimated_credits": 0.0,
+                "total_estimated_credits_exact": "0",
+                "by_reason": {},
+                "parent_operation_ids": [],
             },
             "reconciliation": {
                 "operation_sum_credits": _fmt_dec(total_op_credits),

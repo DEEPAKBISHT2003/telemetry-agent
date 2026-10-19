@@ -20,7 +20,7 @@ from ai_telemetry_agent.attribution.models import (
     TicketAttribution,
     now_utc_iso,
 )
-from ai_telemetry_agent.config.settings import get_user_agent_home
+from ai_telemetry_agent.config.settings import get_user_agent_home, resolve_data_dir
 from ai_telemetry_agent.core.repository import detect_repository_context
 from ai_telemetry_agent.logging.structured import get_logger
 
@@ -36,6 +36,8 @@ def _normalize_path_key(path_val: Optional[Union[str, Path]]) -> str:
     posix_str = p.as_posix()
     if os.name == "nt":
         posix_str = posix_str.lower()
+    if len(posix_str) > 1 and posix_str.endswith("/"):
+        posix_str = posix_str.rstrip("/")
     return posix_str
 
 
@@ -47,12 +49,7 @@ class AttributionStore:
     """
 
     def __init__(self, data_dir: Optional[Union[str, Path]] = None):
-        if data_dir is None:
-            user_home = get_user_agent_home()
-            self.data_dir = (user_home / "data").resolve()
-        else:
-            self.data_dir = Path(data_dir).resolve()
-
+        self.data_dir = resolve_data_dir(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.file_path = self.data_dir / "ticket_attributions.json"
         self._lock = threading.Lock()
@@ -485,6 +482,13 @@ class AttributionStore:
         norm_root = _normalize_path_key(repo_root) if repo_root else None
 
         with self._lock:
+            # Check if multiple distinct roots exist for this repository name
+            distinct_roots_for_name = set()
+            if repo_name:
+                for a in self._attributions.values():
+                    if a.repository_name and a.repository_name.lower() == repo_name.lower() and a.repository_root:
+                        distinct_roots_for_name.add(_normalize_path_key(a.repository_root))
+
             # Sort attributions newest start_time first so latest or active intervals take precedence
             candidates = sorted(
                 self._attributions.values(),
@@ -497,8 +501,12 @@ class AttributionStore:
 
                 # Match repository
                 matches_repo = False
-                if norm_root and attr.repository_root and _normalize_path_key(attr.repository_root) == norm_root:
-                    matches_repo = True
+                attr_root = _normalize_path_key(attr.repository_root) if attr.repository_root else None
+                if norm_root and attr_root:
+                    if attr_root == norm_root:
+                        matches_repo = True
+                    elif len(distinct_roots_for_name) <= 1 and repo_name and attr.repository_name and attr.repository_name.lower() == repo_name.lower():
+                        matches_repo = True
                 elif repo_name and attr.repository_name and attr.repository_name.lower() == repo_name.lower():
                     matches_repo = True
 

@@ -10,7 +10,7 @@ from pathlib import Path
 import platform
 import sys
 import time
-from typing import Optional
+from typing import Optional, Union
 
 # Prevent sys.path[0] package directory from shadowing Python standard library 'logging'
 _pkg_dir = str(Path(__file__).resolve().parent)
@@ -26,6 +26,7 @@ from ai_telemetry_agent.config.settings import (
     get_or_create_device_id,
     get_user_agent_home,
     load_settings,
+    resolve_data_dir,
 )
 from ai_telemetry_agent.core.collector import (
     TelemetryCollector,
@@ -85,28 +86,32 @@ def _safe_print(text: str = "", **kwargs) -> None:
             print(encoded, **kwargs)
 
 
-def _get_active_store(settings: Optional[Settings] = None) -> EventStore:
+def _get_active_store(settings: Optional[Settings] = None, data_dir: Optional[Union[str, Path]] = None) -> EventStore:
     """Resolve active local telemetry store: JSONLEventStore."""
+    if data_dir:
+        return JSONLEventStore(data_dir)
     if settings is None:
         try:
             settings = load_settings()
         except Exception:
             settings = None
 
-    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
-    return JSONLEventStore(data_dir)
+    target_dir = resolve_data_dir(settings=settings)
+    return JSONLEventStore(target_dir)
 
 
-def _get_attribution_store(settings: Optional[Settings] = None) -> AttributionStore:
+def _get_attribution_store(settings: Optional[Settings] = None, data_dir: Optional[Union[str, Path]] = None) -> AttributionStore:
     """Resolve active persistent attribution store."""
+    if data_dir:
+        return AttributionStore(data_dir)
     if settings is None:
         try:
             settings = load_settings()
         except Exception:
             settings = None
 
-    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
-    return AttributionStore(data_dir)
+    target_dir = resolve_data_dir(settings=settings)
+    return AttributionStore(target_dir)
 
 
 def _get_jira_adapter(settings: Optional[Settings] = None):
@@ -364,7 +369,8 @@ def cmd_events(args: argparse.Namespace) -> None:
     except Exception:
         settings = None
 
-    store = _get_active_store(settings)
+    target_data_dir = getattr(args, "data_dir", None)
+    store = _get_active_store(settings, data_dir=target_data_dir)
     events = store.get_events(
         limit=args.last,
         event_type=args.type,
@@ -565,7 +571,8 @@ def cmd_summary(args: argparse.Namespace) -> None:
     except Exception:
         settings = None
 
-    store = _get_active_store(settings)
+    target_data_dir = getattr(args, "data_dir", None)
+    store = _get_active_store(settings, data_dir=target_data_dir)
     summary = store.get_repository_summary(repository_name=args.repo)
 
     if not summary:
@@ -609,7 +616,8 @@ def cmd_jira(args: argparse.Namespace) -> None:
     except Exception:
         settings = None
 
-    attr_store = _get_attribution_store(settings)
+    target_data_dir = getattr(args, "data_dir", None)
+    attr_store = _get_attribution_store(settings, data_dir=target_data_dir)
     action = getattr(args, "jira_command", None)
 
     if not action:
@@ -844,7 +852,8 @@ def cmd_jira(args: argparse.Namespace) -> None:
     elif action == "summary":
         event_store = _get_active_store(settings)
         jira_adapter = _get_jira_adapter(settings)
-        aggregator = TicketAggregator(event_store, attr_store, jira_adapter)
+        hook_registry = _get_hook_registry(settings)
+        aggregator = TicketAggregator(event_store, attr_store, jira_adapter, hook_registry=hook_registry)
         summaries = aggregator.get_ticket_summaries(
             repository_name=repo_arg,
             ticket_key=getattr(args, "ticket", None),
@@ -893,10 +902,14 @@ def cmd_jira(args: argparse.Namespace) -> None:
             print(f"Branches      : {', '.join(s.branches) if s.branches else 'none'}")
             print(f"Sessions      : {s.sessions_count}")
             print(f"AI Runs       : {s.ai_runs_count}")
+            if s.hook_executions_count > 0:
+                print(f"Hook Execs    : {s.hook_executions_count}")
             if s.has_credit_data:
                 print(f"Total Credits : {s.total_credits:.4f} {s.credit_unit or 'credit'}s")
             else:
                 print(f"Total Credits : unavailable")
+            if s.has_estimated_credits:
+                print(f"Est. Credits  : {s.estimated_credits:.4f} (allocated estimate)")
             if s.has_token_data:
                 in_tok = f"{s.input_tokens:,}" if s.input_tokens is not None else "-"
                 out_tok = f"{s.output_tokens:,}" if s.output_tokens is not None else "-"
@@ -985,26 +998,30 @@ def cmd_jira(args: argparse.Namespace) -> None:
             sys.exit(1)
 
 
-def _get_accounting_store(settings: Optional[Settings] = None) -> AccountingStore:
+def _get_accounting_store(settings: Optional[Settings] = None, data_dir: Optional[Union[str, Path]] = None) -> AccountingStore:
     """Resolve active accounting store."""
+    if data_dir:
+        return AccountingStore(data_dir)
     if settings is None:
         try:
             settings = load_settings()
         except Exception:
             settings = None
-    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
-    return AccountingStore(data_dir)
+    target_dir = resolve_data_dir(settings=settings)
+    return AccountingStore(target_dir)
 
 
-def _get_hook_registry(settings: Optional[Settings] = None) -> HookRegistry:
+def _get_hook_registry(settings: Optional[Settings] = None, data_dir: Optional[Union[str, Path]] = None) -> HookRegistry:
     """Resolve active hook registry."""
+    if data_dir:
+        return HookRegistry(data_dir)
     if settings is None:
         try:
             settings = load_settings()
         except Exception:
             settings = None
-    data_dir = settings.data_dir if settings else (get_user_agent_home() / "data").resolve()
-    return HookRegistry(data_dir)
+    target_dir = resolve_data_dir(settings=settings)
+    return HookRegistry(target_dir)
 
 
 def cmd_accounting(args: argparse.Namespace) -> None:
@@ -1014,8 +1031,10 @@ def cmd_accounting(args: argparse.Namespace) -> None:
     except Exception:
         settings = None
 
-    store = _get_accounting_store(settings)
-    aggregator = AccountingAggregator(store)
+    target_data_dir = getattr(args, "data_dir", None)
+    store = _get_accounting_store(settings, data_dir=target_data_dir)
+    hook_registry = _get_hook_registry(settings, data_dir=target_data_dir)
+    aggregator = AccountingAggregator(store, hook_registry=hook_registry)
     action = getattr(args, "accounting_command", None)
 
     if not action:
@@ -1023,6 +1042,8 @@ def cmd_accounting(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if action == "summary":
+        if getattr(args, "estimate_hooks", False) and hook_registry:
+            hook_registry.allocate_estimated_credits(store)
         _handle_accounting_summary(args, aggregator)
     elif action == "operations":
         _handle_accounting_operations(args, store)
@@ -1101,31 +1122,74 @@ def _handle_accounting_summary(args: argparse.Namespace, aggregator: AccountingA
         for trig, data in summary["by_trigger_type"].items():
             _safe_print(f"  {trig:<16}: {data['credits_exact']} credits ({data['count']} ops)")
 
-    if by_tick or show_all:
+    if by_tick and by_hook:
+        _safe_print("\n--- Jira Ticket Attribution by Hook ---")
+        tickets = summary["jira_attribution"]["attributed_tickets"]
+        if tickets:
+            for t_key, t_data in tickets.items():
+                est_sec = f", est: {t_data['hook_estimated_credits_exact']}" if t_data.get("hook_estimated_credits") is not None else ""
+                _safe_print(f"\n  Ticket: {t_key} (Total: {t_data['credits_exact']} credits, {t_data['count']} ops, {t_data.get('hook_count', 0)} hooks{est_sec})")
+                t_hooks = t_data.get("by_hook", {})
+                if t_hooks:
+                    for h_name, h_data in t_hooks.items():
+                        est_str = f", est: {h_data['estimated_credits_exact']}" if h_data.get("estimated_credits") is not None else ""
+                        _safe_print(f"    - {h_name:<20}: {h_data['count']} execs, actual credits: {h_data['credits_exact']}{est_str}")
+                else:
+                    _safe_print("    No hook executions for this ticket.")
+        else:
+            _safe_print("  No attributed tickets found.")
+        unassigned = summary["jira_attribution"]["unassigned"]
+        if unassigned["count"] > 0 or unassigned.get("hook_count", 0) > 0:
+            est_sec = f", est: {unassigned['hook_estimated_credits_exact']}" if unassigned.get("hook_estimated_credits") is not None else ""
+            _safe_print(f"\n  Ticket: UNASSIGNED (Total: {unassigned['credits_exact']} credits, {unassigned['count']} ops, {unassigned.get('hook_count', 0)} hooks{est_sec})")
+            u_hooks = unassigned.get("by_hook", {})
+            if u_hooks:
+                for h_name, h_data in u_hooks.items():
+                    est_str = f", est: {h_data['estimated_credits_exact']}" if h_data.get("estimated_credits") is not None else ""
+                    _safe_print(f"    - {h_name:<20}: {h_data['count']} execs, actual credits: {h_data['credits_exact']}{est_str}")
+    elif by_tick or show_all:
         _safe_print("\n--- Jira Ticket Attribution ---")
         tickets = summary["jira_attribution"]["attributed_tickets"]
         if tickets:
             for t_key, data in tickets.items():
-                _safe_print(f"  {t_key:<16}: {data['credits_exact']} credits ({data['count']} ops, {data['sessions_count']} sessions)")
+                h_cnt = f", {data['hook_count']} hooks" if data.get("hook_count") else ""
+                est_str = f", est: {data['hook_estimated_credits_exact']}" if data.get("hook_estimated_credits") is not None else ""
+                _safe_print(f"  {t_key:<16}: {data['credits_exact']} credits ({data['count']} ops, {data['sessions_count']} sessions{h_cnt}{est_str})")
         else:
             _safe_print("  No attributed tickets found.")
         unassigned = summary["jira_attribution"]["unassigned"]
         if unassigned["count"] > 0:
-            _safe_print(f"  UNASSIGNED      : {unassigned['credits_exact']} credits ({unassigned['count']} ops)")
+            h_cnt = f", {unassigned['hook_count']} hooks" if unassigned.get("hook_count") else ""
+            est_str = f", est: {unassigned['hook_estimated_credits_exact']}" if unassigned.get("hook_estimated_credits") is not None else ""
+            _safe_print(f"  UNASSIGNED      : {unassigned['credits_exact']} credits ({unassigned['count']} ops{h_cnt}{est_str})")
 
     if by_model or show_all:
         _safe_print("\n--- By Model ---")
         for mdl, data in summary["by_model"].items():
             _safe_print(f"  {mdl:<25}: {data['credits_exact']} credits ({data['count']} ops)")
 
-    if by_hook:
+    if by_hook and not by_tick:
         _safe_print("\n--- By Hook ---")
         hooks = summary["by_hook"]
         if hooks:
             for h_name, data in hooks.items():
-                _safe_print(f"  {h_name:<25}: {data['credits_exact']} credits ({data['count']} ops, trigger: {data['trigger']})")
-        else:
-            _safe_print("  No hook-attributed operations found.")
+                est_str = f", est: {data['estimated_credits_exact']}" if data.get("estimated_credits") is not None else ""
+                _safe_print(f"  {h_name:<25}: {data['credits_exact']} credits ({data['count']} ops, trigger: {data['trigger']}{est_str})")
+    diag = summary.get("hook_diagnostics")
+    if diag and (by_hook or getattr(args, "estimate_hooks", False)):
+        _safe_print("\n--- Hook Estimation Diagnostics ---")
+        _safe_print(f"  Eligible Hooks   : {diag['eligible_count']}")
+        _safe_print(f"  Ineligible Hooks : {diag['ineligible_count']}")
+        _safe_print(f"  Ambiguous Hooks  : {diag['ambiguous_count']}")
+        _safe_print(f"  Estimated Credits: {diag['total_estimated_credits_exact']} credits")
+        if diag.get("by_reason"):
+            reasons_str = ", ".join(f"{r}: {cnt}" for r, cnt in sorted(diag["by_reason"].items()))
+            _safe_print(f"  Unallocated Reasons: {reasons_str}")
+        if diag.get("parent_operation_ids"):
+            parents_str = ", ".join(diag["parent_operation_ids"][:5])
+            if len(diag["parent_operation_ids"]) > 5:
+                parents_str += f" (+{len(diag['parent_operation_ids']) - 5} more)"
+            _safe_print(f"  Correlated Parents: {parents_str}")
 
     _safe_print("=" * 70)
 
@@ -1258,20 +1322,26 @@ def _handle_accounting_reconciliation(args: argparse.Namespace, aggregator: Acco
 
 
 def _handle_accounting_hooks(args: argparse.Namespace, settings: Optional[Settings]) -> None:
-    registry = _get_hook_registry(settings)
+    target_data_dir = getattr(args, "data_dir", None)
+    registry = _get_hook_registry(settings, data_dir=target_data_dir)
+    if getattr(args, "allocate_estimates", False):
+        store = _get_accounting_store(settings, data_dir=target_data_dir)
+        registry.allocate_estimated_credits(store)
     hooks = registry.get_registered_hooks()
     execs = registry.get_executions(limit=getattr(args, "limit", 50))
 
     if getattr(args, "json", False):
+        diag = registry.get_diagnostics() if hasattr(registry, "get_diagnostics") else {}
         print(json.dumps({
             "registered_hooks": [h.to_dict() for h in hooks],
             "executions": [e.to_dict() for e in execs],
+            "diagnostics": diag,
         }, indent=2))
         return
 
-    _safe_print("=" * 95)
+    _safe_print("=" * 115)
     _safe_print("REGISTERED HOOKS")
-    _safe_print("=" * 95)
+    _safe_print("=" * 115)
     if hooks:
         for h in hooks:
             ai_flag = "AI-Initiating" if h.is_ai_powered else "Shell-Only"
@@ -1280,23 +1350,35 @@ def _handle_accounting_hooks(args: argparse.Namespace, settings: Optional[Settin
     else:
         _safe_print("  No explicitly registered hooks in registry.")
 
-    _safe_print("\n" + "=" * 95)
+    _safe_print("\n" + "=" * 115)
     _safe_print("RECENT HOOK EXECUTIONS")
-    _safe_print("=" * 95)
-    _safe_print(f"{'EXECUTED AT':<20} | {'HOOK NAME':<20} | {'TRIGGER':<15} | {'CLASS':<12} | {'CREDITS':<10} | {'OUTCOME'}")
-    _safe_print("-" * 95)
+    _safe_print("=" * 115)
+    _safe_print(f"{'EXECUTED AT':<20} | {'HOOK NAME':<16} | {'TRIGGER':<12} | {'TICKET':<10} | {'CREDITS':<8} | {'ESTIMATE':<8} | {'PARENT OP':<16} | {'STATUS'}")
+    _safe_print("-" * 115)
     if execs:
         for e in execs:
             ts = e.executed_at[:19]
-            name = e.hook_name[:20]
-            trig = e.trigger_type[:15]
-            cls_name = "Shell-Only" if e.is_shell_only else ("AI-Init" if e.initiates_ai else "Standard")
+            name = e.hook_name[:16]
+            trig = e.trigger_type[:12]
+            t_key = (e.jira_key or "UNASSIGNED")[:10]
             creds = str(e.credits_used) if e.credits_used is not None else "unavail"
-            out = e.outcome
-            _safe_print(f"{ts:<20} | {name:<20} | {trig:<15} | {cls_name:<12} | {creds:<10} | {out}")
+            est = str(e.estimated_credits) if e.estimated_credits is not None else "-"
+            parent_col = (e.parent_operation_id or "-")[:16]
+            stat_col = e.correlation_status or e.outcome
+            _safe_print(f"{ts:<20} | {name:<16} | {trig:<12} | {t_key:<10} | {creds:<8} | {est:<8} | {parent_col:<16} | {stat_col}")
+        
+        measured_creds = sum_credits([e.credits_used for e in execs])
+        est_creds = sum_credits([e.estimated_credits for e in execs])
+        _safe_print("-" * 115)
+        _safe_print(f"Total: {len(execs)} executions | Measured Credits: {measured_creds} | Estimated Credits: {est_creds}")
+        diag = registry.get_diagnostics() if hasattr(registry, "get_diagnostics") else {}
+        if diag.get("eligible_count") or diag.get("ineligible_count") or diag.get("ambiguous_count"):
+            _safe_print(f"Diagnostics: Eligible: {diag['eligible_count']} | Ineligible: {diag['ineligible_count']} | Ambiguous: {diag['ambiguous_count']}")
+            if diag.get("by_reason"):
+                _safe_print(f"Reasons: {', '.join(f'{k}: {v}' for k, v in sorted(diag['by_reason'].items()))}")
     else:
         _safe_print("  No hook executions recorded.")
-    _safe_print("=" * 95)
+    _safe_print("=" * 115)
 
 
 def _handle_accounting_import_events(
@@ -1530,6 +1612,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Local AI and Engineering Telemetry Agent v0.1.2",
     )
     parser.add_argument("--env-file", type=str, default=None, help="Path to .env configuration file")
+    parser.add_argument("--data-dir", type=str, default=None, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
 
     subparsers = parser.add_subparsers(dest="command", help="Agent actions")
 
@@ -1609,12 +1692,14 @@ def build_parser() -> argparse.ArgumentParser:
     # Jira ticket attribution commands
     p_jira = subparsers.add_parser("jira", help="Manage Jira ticket attribution and reporting")
     p_jira.add_argument("--repo", type=str, default=None, help="Target repository path (default: current directory)")
+    p_jira.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     jira_subparsers = p_jira.add_subparsers(dest="jira_command", help="Jira subcommands")
 
     # jira select <ticket>
     p_jsel = jira_subparsers.add_parser("select", help="Select or assign a Jira ticket to current repository (validates issue existence with Jira)")
     p_jsel.add_argument("ticket", type=str, help="Jira issue key (e.g. PROJ-148)")
     p_jsel.add_argument("--repo", type=str, default=None, help="Target repository path")
+    p_jsel.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     p_jsel.add_argument("--allow-unverified", "--offline", dest="allow_unverified", action="store_true", help="Allow selecting an unverified issue when Jira is unconfigured or unreachable")
 
     # jira status
@@ -1668,10 +1753,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Accounting commands
     p_acc = subparsers.add_parser("accounting", help="Comprehensive AI credit expenditure accounting and reconciliation")
+    p_acc.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     acc_subparsers = p_acc.add_subparsers(dest="accounting_command", help="Accounting subcommands")
 
     # accounting summary
     p_asum = acc_subparsers.add_parser("summary", help="Show AI credit expenditure summary across dimensions")
+    p_asum.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     p_asum.add_argument("--by-provider", action="store_true", help="Group expenditure by AI provider")
     p_asum.add_argument("--by-trigger", action="store_true", help="Group expenditure by trigger mechanism")
     p_asum.add_argument("--by-hook", action="store_true", help="Group expenditure by agent hook")
@@ -1683,10 +1770,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_asum.add_argument("--provider", type=str, default=None, help="Filter by AI provider")
     p_asum.add_argument("--from", dest="date_from", type=str, default=None, help="Filter start date (YYYY-MM-DD)")
     p_asum.add_argument("--to", dest="date_to", type=str, default=None, help="Filter end date (YYYY-MM-DD)")
+    p_asum.add_argument("--estimate-hooks", "--estimate", dest="estimate_hooks", action="store_true", help="Allocate and display estimated credits for unmeasured hook executions")
     p_asum.add_argument("--json", action="store_true", help="Output raw JSON summary")
 
     # accounting operations
     p_aops = acc_subparsers.add_parser("operations", help="List individual granular AI operation records")
+    p_aops.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     p_aops.add_argument("--limit", type=int, default=50, help="Max operations to display (default: 50)")
     p_aops.add_argument("--session", type=str, default=None, help="Filter by session ID")
     p_aops.add_argument("--ticket", type=str, default=None, help="Filter by Jira issue key")
@@ -1698,17 +1787,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     # accounting operation
     p_aop = acc_subparsers.add_parser("operation", help="Display full provenance and audit trail for a single operation")
+    p_aop.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     p_aop.add_argument("--id", type=str, required=True, help="Operation ID")
     p_aop.add_argument("--json", action="store_true", help="Output raw JSON record")
 
     # accounting reconciliation
     p_arec = acc_subparsers.add_parser("reconciliation", help="Reconcile granular operation expenditure against session/account totals")
+    p_arec.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     p_arec.add_argument("--session", type=str, default=None, help="Optional session ID to reconcile")
     p_arec.add_argument("--json", action="store_true", help="Output raw JSON reconciliation report")
 
     # accounting hooks
     p_ahook = acc_subparsers.add_parser("hooks", help="Inspect registered hooks and recent hook execution lifecycle events")
+    p_ahook.add_argument("--data-dir", type=str, default=argparse.SUPPRESS, help="Custom data storage directory (overrides TELEMETRY_DATA_DIR)")
     p_ahook.add_argument("--limit", type=int, default=50, help="Max executions to display (default: 50)")
+    p_ahook.add_argument("--allocate-estimates", "--estimate", dest="allocate_estimates", action="store_true", help="Allocate estimated credits to unmeasured hook executions from correlated parent runs")
     p_ahook.add_argument("--json", action="store_true", help="Output raw JSON registry data")
 
     # accounting import-events
