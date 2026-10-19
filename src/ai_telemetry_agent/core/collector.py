@@ -1,6 +1,7 @@
 """Core Telemetry Collector engine managing lifecycle, sources, and JSONL persistence."""
 
 import datetime
+from decimal import Decimal
 import json
 import os
 from pathlib import Path

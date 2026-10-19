@@ -1002,6 +1002,42 @@ class TestExplicitParentCorrelationAndAccounting(unittest.TestCase):
 
 
 
+    def test_cli_accounting_hooks_with_executions(self):
+        """CLI accounting hooks command formats executions and calculates totals via sum_credits without NameError."""
+        from ai_telemetry_agent.cli import _handle_accounting_hooks
+        import argparse
+
+        reg = HookRegistry(self.data_dir)
+        reg.record_execution(
+            hook_id="PreToolUse",
+            hook_name="PreToolUse",
+            trigger_type="event_driven",
+            provider="kiro_ide",
+            executed_at="2026-10-19T07:10:12Z",
+            credits_used=Decimal("1.25"),
+            estimated_credits=Decimal("0.50"),
+            parent_operation_id="op_parent_123",
+            correlation_status="correlated",
+        )
+
+        args = argparse.Namespace(
+            data_dir=str(self.data_dir),
+            json=False,
+            limit=50,
+            allocate_estimates=False,
+        )
+        buf = io.StringIO()
+        import contextlib
+        with contextlib.redirect_stdout(buf):
+            _handle_accounting_hooks(args, settings=None)
+
+        output = buf.getvalue()
+        self.assertIn("RECENT HOOK EXECUTIONS", output)
+        self.assertIn("PreToolUse", output)
+        self.assertIn("Measured Credits: 1.25", output)
+        self.assertIn("Estimated Credits: 0.50", output)
+
+
 if __name__ == "__main__":
     unittest.main()
 

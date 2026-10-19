@@ -68,7 +68,7 @@ from ai_telemetry_agent.sources.kiro import KIRO_AI_TELEMETRY_STATUS
 from ai_telemetry_agent.storage.base import EventStore
 from ai_telemetry_agent.storage.jsonl_store import JSONLEventStore
 from ai_telemetry_agent.accounting.aggregator import AccountingAggregator
-from ai_telemetry_agent.accounting.models import AIOperationRecord
+from ai_telemetry_agent.accounting.models import AIOperationRecord, sum_credits
 from ai_telemetry_agent.accounting.registry import HookRegistry
 from ai_telemetry_agent.accounting.store import AccountingStore
 

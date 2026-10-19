@@ -1,7 +1,7 @@
 """Aggregation and reporting logic attributing AI sessions to Jira tickets."""
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from ai_telemetry_agent.attribution.jira_adapter import JiraAdapter, NullJiraAdapter
 from ai_telemetry_agent.attribution.models import TicketSummary
