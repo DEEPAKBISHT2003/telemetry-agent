@@ -98,7 +98,7 @@ pip install ai-telemetry-agent
 
 ### 2. First-Time Developer Enrollment & Hook Setup
 
-Run the setup command:
+Run the installation and enrollment command:
 
 ```bash
 telemetry-agent install
@@ -106,30 +106,44 @@ telemetry-agent install
 
 When run interactively for the first time:
 
+1. **Developer Name**: Automatically defaults to your Git name (`git config --local user.name` -> `git config --global user.name` -> `team member`). Press Enter to accept or enter a custom name.
+2. **Central Server URL**: Enter your organization's telemetry server (e.g., `https://telemetry.yourorg.com`).
+3. **Enrollment Token**: Enter your one-time enrollment token (input is masked for security).
+4. **Lifecycle Hooks**: Automatically installs Antigravity hooks into `~/.gemini/config/hooks.json` without modifying other hooks.
+5. **Background Service** *(Windows)*: Optionally configures persistent Windows Task Scheduler uploader.
+
 ```text
-========================================
-       AI Telemetry Agent Setup
-========================================
+=======================================================
+       AI Telemetry Agent — Installation
+=======================================================
+Enter your developer name [Rahul Sharma]: 
+Developer Name: Rahul Sharma
+Enter central telemetry server URL: https://telemetry.yourorg.com
+Server URL: https://telemetry.yourorg.com
+Enter one-time enrollment token (input hidden): 
 
-Enter your name: Rahul Sharma
+Submitting enrollment claim...
+Verifying device credentials...
+✓ Device credential verified successfully.
+✓ Developer identity saved locally.
+Installing global Antigravity lifecycle hooks...
+✓ Antigravity lifecycle hooks installed.
+✓ Upload configuration enabled and persisted to config.env.
 
-Detected device:
-  Hostname: WORKSTATION-01
-  Device ID: dev-401e19f040bb
-
-Developer:
-  Rahul Sharma
-
-Save this identity? [Y/n]: Y
-[OK] Developer identity saved
-[OK] Antigravity hooks installed
-[OK] Telemetry agent configured
+=======================================================
+✓ Installation Complete!
+  Developer : Rahul Sharma
+  Server    : https://telemetry.yourorg.com
+  Device ID : dev-401e19f040bb
+  Hooks     : Installed in ~/.gemini/config/hooks.json
+  Uploads   : Configured and enabled
+=======================================================
 ```
 
-#### Non-Interactive Setup (CI / Automated Environments):
+#### Non-Interactive Installation (CI / Automated Environments):
 
 ```bash
-telemetry-agent install --name "Rahul Sharma" -y
+telemetry-agent install --name "Rahul Sharma" --server "https://telemetry.yourorg.com" --token "$ENROLLMENT_TOKEN" -y
 ```
 
 ---

@@ -98,7 +98,7 @@ class WindowsTaskSchedulerManager:
             return False, f"Windows Task Scheduler is only supported on Windows (detected: {platform.system()})."
 
         if not self.cred_store.has_credential():
-            return False, "Device is not enrolled. Run 'telemetry-agent setup' or 'telemetry-agent enroll' first."
+            return False, "Device is not enrolled. Run 'telemetry-agent install' or 'telemetry-agent enroll' first."
 
         token = self.cred_store.load_credential()
         if not token:
